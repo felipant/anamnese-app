@@ -1,0 +1,8 @@
+name = "anamnese-app"
+pages_build_output_dir = ".svelte-kit/cloudflare"
+compatibility_date = "2024-04-05"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "banco-anamnese"
+database_id = "b11bb2e5-7092-47ea-a1d2-97b451956f10"
