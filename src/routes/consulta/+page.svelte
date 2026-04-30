@@ -1,13 +1,14 @@
 <script>
 	import { onDestroy, onMount } from 'svelte';
 	import { consultaDraft } from '$lib/consultaStore';
+	import { loadFromLocalStorage, saveToLocalStorage } from '$lib/useLocalStorage.js';
 
 	/** @typedef {{ id: number; subcat: string; subcat_desc: string; grupo: string; cat: string; cat_desc: string; cap: string; cap_desc: string; }} CidSearchItem */
-	/** @typedef {{ sourceId: number | null; principio_ativo: string; concentracao: string; classe: string; dose: string; forma_farmaceutica: string; fornecimento_sus: string; observacoes: string; frequenciaTipo: string; diario: { manha: string; tarde: string; noite: string; }; semanal: string; intervalo: string; especial: string; }} MedicationForm */
+	/** @typedef {{ sourceId: number | null; principio_ativo: string; concentracao: string; classe: string; forma_farmaceutica: string; fornecimento_sus: string; observacoes: string; frequenciaTipo: string; diario: { manha: string; tarde: string; noite: string; }; semanal: string; intervalo: string; especial: string; doseQual: string; }} MedicationForm */
 	/** @typedef {{ subcat: string; subcat_desc: string; cat: string; cat_desc: string; cap: string; cap_desc: string; mesAnoDiagnostico: string; historico: string; queixasAtuais: string; }} DiseaseForm */
 	/** @typedef {{ id: string; mode: string; subcat: string; subcat_desc: string; cat: string; cat_desc: string; cap: string; cap_desc: string; mesAnoDiagnostico: string; historico: string; queixasAtuais: string; }} DiseaseItem */
 	/** @typedef {{ id: number; principio_ativo: string; concentracao: string; forma_farmaceutica: string; unidade_fornecimento: string; fornecimento_sus: string; classe: string; }} MedicationSearchItem */
-	/** @typedef {{ id: string; sourceId: number | null; principio_ativo: string; concentracao: string; classe: string; dose: string; forma_farmaceutica: string; fornecimento_sus: string; observacoes: string; frequenciaTipo: string; diario: { manha: string; tarde: string; noite: string; }; semanal: string; intervalo: string; especial: string; }} ConsultationMedication */
+	/** @typedef {{ id: string; sourceId: number | null; principio_ativo: string; concentracao: string; classe: string; forma_farmaceutica: string; fornecimento_sus: string; observacoes: string; frequenciaTipo: string; diario: { manha: string; tarde: string; noite: string; }; semanal: string; intervalo: string; especial: string; doseQual: string; }} ConsultationMedication */
 	/** @typedef {{ id: string; parentesco: string; idade: string; detalhes: string; }} FamilyHistoryRelative */
 	/** @typedef {{ checked: boolean; parentes: FamilyHistoryRelative[]; detalhes: string; }} FamilyHistoryEntry */
 
@@ -183,11 +184,80 @@
 		}
 	};
 
+	/** @typedef {{ id: string; nome: string; pacote?: string; valoresReferencia?: string; unidade?: string; resultado?: string; selecionado?: boolean; }} LaboratorioItem */
+	/** @typedef {{ id: string; nome: string; motivo?: string; resultado?: string; medicoExecutor?: string; }} ImagemItem */
+
+	// Variáveis para Exames Laboratoriais
+	/** @type {LaboratorioItem[]} */
+	let laboratorioSelecionados = [];
+	/** @type {HTMLDialogElement | null} */
+	let labDialogRef;
+	let labSearch = '';
+	let labLoading = false;
+	/** @type {Array<{ id: number; nome: string; pacote: string | null; valores_referencia: string | null; unidade_medida: string | null; }>} */
+	let labSearchResults = [];
+	/** @type {ReturnType<typeof setTimeout> | undefined} */
+	let labSearchTimer;
+	let labModo = 'pacote'; // 'pacote' ou 'manual'
+	let labPacoteSelecionado = '';
+	let labExameManual = { nome: '', valoresReferencia: '', unidade: '' };
+
+	// Variáveis para Exames de Imagem
+	/** @type {ImagemItem[]} */
+	let imagemSelecionados = [];
+	/** @type {HTMLDialogElement | null} */
+	let imagemDialogRef;
+	let imagemSearch = '';
+	let imagemLoading = false;
+	/** @type {Array<{ id: number; descricao: string; }>} */
+	let imagemSearchResults = [];
+	/** @type {ReturnType<typeof setTimeout> | undefined} */
+	let imagemSearchTimer;
+	let imagemExameManual = '';
+
 	let objective = {
-		sinaisVitais: '',
-		exameFisico: '',
-		examesComplementares: ''
+		// Sinais Vitais
+		sinaisVitais: {
+			pas: '',
+			pad: '',
+			temperatura: '',
+			frequenciaCardiaca: '',
+			frequenciaRespiratoria: '',
+			spo2: ''
+		},
+		// Dados Antropométricos
+		antropometria: {
+			altura: '',
+			peso: '',
+			circunferenciaAbdominal: '',
+			imc: ''
+		},
+		// Exame Físico
+		exameFisico: {
+			geral: '',
+			aparelhoDigestorio: '',
+			aparelhoCardiovascular: '',
+			sistemaLinfatico: '',
+			neurologico: '',
+			respiratorioInferior: '',
+			respiratorioSuperior: '',
+			ginecologico: ''
+		}
 	};
+
+	// Cálculo automático do IMC (reativo)
+	$: if (objective.antropometria.peso && objective.antropometria.altura) {
+		const peso = parseFloat(objective.antropometria.peso);
+		const altura = parseFloat(objective.antropometria.altura) / 100; // converter cm para m
+		if (peso > 0 && altura > 0) {
+			const imc = peso / (altura * altura);
+			objective.antropometria.imc = imc.toFixed(1);
+		} else {
+			objective.antropometria.imc = '';
+		}
+	} else {
+		objective.antropometria.imc = '';
+	}
 
 	let assessment = {
 		hipoteses: '',
@@ -204,10 +274,24 @@
 	/** @type {Record<string, FamilyHistoryEntry>} */
 	let familyHistory = createEmptyFamilyHistory();
 
+	// Chaves para persistência independente de doenças e medicamentos
+	const DISEASES_STORAGE_KEY = 'consulta-doencas-v1';
+	const MEDICATIONS_STORAGE_KEY = 'consulta-medicamentos-v1';
+
 	$: diseaseGroups = groupBy(diseases, (item) => item.cap_desc || 'Sem capítulo definido');
 	$: medicationGroups = groupBy(medications, (item) => item.classe || 'Classe não informada');
+	$: laboratorioAgrupado = groupBy(laboratorioSelecionados, (item) => item.pacote || 'Exames Avulsos');
+	$: laboratorioSelecionadosTodos = laboratorioSelecionados.length > 0 && laboratorioSelecionados.every((item) => item.selecionado);
 	$: if (draftHydrated) {
 		consultaDraft.set(buildDraftSnapshot());
+	}
+
+	// Persistência explícita de doenças e medicamentos com reatividade garantida
+	$: if (draftHydrated && diseases) {
+		saveToLocalStorage(DISEASES_STORAGE_KEY, diseases);
+	}
+	$: if (draftHydrated && medications) {
+		saveToLocalStorage(MEDICATIONS_STORAGE_KEY, medications);
 	}
 
 	/**
@@ -252,7 +336,6 @@
 			principio_ativo: '',
 			concentracao: '',
 			classe: '',
-			dose: '',
 			forma_farmaceutica: '',
 			fornecimento_sus: '',
 			observacoes: '',
@@ -264,7 +347,8 @@
 			},
 			semanal: 'Segunda a sexta',
 			intervalo: '12h',
-			especial: ''
+			especial: '',
+			doseQual: ''
 		};
 	}
 
@@ -504,7 +588,7 @@
 		}
 
 		if (editingDiseaseId) {
-			diseases = diseases.map((item) => (item.id === editingDiseaseId ? finalDisease : item));
+			diseases = [...diseases.map((item) => (item.id === editingDiseaseId ? finalDisease : item))];
 		} else {
 			diseases = [...diseases, finalDisease];
 		}
@@ -517,7 +601,7 @@
 	 */
 	function deleteDisease(id) {
 		if (!window.confirm('Excluir esta doença do prontuário em montagem?')) return;
-		diseases = diseases.filter((item) => item.id !== id);
+		diseases = [...diseases.filter((item) => item.id !== id)];
 	}
 
 	/**
@@ -533,7 +617,6 @@
 					principio_ativo: item.principio_ativo ?? '',
 					concentracao: item.concentracao ?? '',
 					classe: item.classe ?? '',
-					dose: item.dose ?? '',
 					forma_farmaceutica: item.forma_farmaceutica ?? '',
 					fornecimento_sus: item.fornecimento_sus ?? '',
 					observacoes: item.observacoes ?? '',
@@ -541,7 +624,8 @@
 					diario: normalizeDailyFrequency(item.diario),
 					semanal: item.semanal ?? 'Segunda a sexta',
 					intervalo: item.intervalo ?? '12h',
-					especial: item.especial ?? ''
+					especial: item.especial ?? '',
+					doseQual: item.doseQual ?? ''
 				}
 			: createEmptyMedicationForm();
 		medicationManualMode = Boolean(item && !item.sourceId);
@@ -614,7 +698,6 @@
 			principio_ativo: medicationForm.principio_ativo.trim(),
 			concentracao: medicationForm.concentracao.trim(),
 			classe: medicationForm.classe.trim(),
-			dose: medicationForm.dose.trim(),
 			forma_farmaceutica: medicationForm.forma_farmaceutica.trim(),
 			fornecimento_sus: medicationForm.fornecimento_sus.trim(),
 			observacoes: medicationForm.observacoes.trim(),
@@ -622,16 +705,17 @@
 			diario: normalizeDailyFrequency(medicationForm.diario),
 			semanal: medicationForm.semanal,
 			intervalo: medicationForm.intervalo,
-			especial: medicationForm.especial.trim()
+			especial: medicationForm.especial.trim(),
+			doseQual: medicationForm.doseQual.trim()
 		};
 
-		if (!finalMedication.principio_ativo || !finalMedication.dose) {
-			erro = 'Preencha o princípio ativo e a dose.';
+		if (!finalMedication.principio_ativo) {
+			erro = 'Preencha o princípio ativo.';
 			return;
 		}
 
 		if (editingMedicationId) {
-			medications = medications.map((item) => (item.id === editingMedicationId ? finalMedication : item));
+			medications = [...medications.map((item) => (item.id === editingMedicationId ? finalMedication : item))];
 		} else {
 			medications = [...medications, finalMedication];
 		}
@@ -644,7 +728,7 @@
 	 */
 	function deleteMedication(id) {
 		if (!window.confirm('Excluir este medicamento do prontuário em montagem?')) return;
-		medications = medications.filter((item) => item.id !== id);
+		medications = [...medications.filter((item) => item.id !== id)];
 	}
 
 	/**
@@ -659,8 +743,14 @@
 			].filter(Boolean);
 			return periods.length ? `Diário (${periods.join(', ')})` : 'Diário';
 		}
-		if (item.frequenciaTipo === 'semanal') return `Semanal: ${item.semanal}`;
-		if (item.frequenciaTipo === 'intervalo') return `Intervalo: a cada ${item.intervalo}`;
+		if (item.frequenciaTipo === 'semanal') {
+			const doseInfo = item.doseQual ? ` - ${item.doseQual}` : '';
+			return `Semanal: ${item.semanal}${doseInfo}`;
+		}
+		if (item.frequenciaTipo === 'intervalo') {
+			const doseInfo = item.doseQual ? ` - ${item.doseQual}` : '';
+			return `Intervalo: a cada ${item.intervalo}${doseInfo}`;
+		}
 		return `Especial: ${item.especial || 'não informado'}`;
 	}
 
@@ -680,12 +770,16 @@
 		return {
 			version: 1,
 			subjective,
-			objective,
+			objective: {
+				sinaisVitais: { ...objective.sinaisVitais },
+				antropometria: { ...objective.antropometria },
+				exameFisico: { ...objective.exameFisico }
+			},
 			assessment,
 			plan,
 			familyHistory,
-			diseases,
-			medications
+			diseases: [...diseases],
+			medications: [...medications]
 		};
 	}
 
@@ -715,7 +809,13 @@
 				}
 			};
 		}
-		if (draft.objective) objective = { ...objective, ...draft.objective };
+		if (draft.objective) {
+			objective = {
+				sinaisVitais: { ...objective.sinaisVitais, ...(draft.objective.sinaisVitais ?? {}) },
+				antropometria: { ...objective.antropometria, ...(draft.objective.antropometria ?? {}) },
+				exameFisico: { ...objective.exameFisico, ...(draft.objective.exameFisico ?? {}) }
+			};
+		}
 		if (draft.assessment) assessment = { ...assessment, ...draft.assessment };
 		if (draft.plan) plan = { ...plan, ...draft.plan };
 		if (draft.familyHistory) {
@@ -751,7 +851,8 @@
 		if (Array.isArray(draft.medications)) {
 			medications = draft.medications.map((item) => ({
 				...item,
-				diario: normalizeDailyFrequency(item.diario)
+				diario: normalizeDailyFrequency(item.diario),
+				doseQual: item.doseQual || ''
 			}));
 		}
 	}
@@ -764,6 +865,454 @@
 		window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank', 'noopener,noreferrer');
 	}
 
+	// ==========================================
+	// FUNÇÕES DE EXPORTAÇÃO (ÁREA DE TRANSFERÊNCIA)
+	// ==========================================
+
+	/**
+	 * Verifica se um valor está vazio (null, undefined, string vazia, array vazio)
+	 * @param {unknown} value
+	 * @returns {boolean}
+	 */
+	function isEmpty(value) {
+		if (value === null || value === undefined) return true;
+		if (typeof value === 'string') return value.trim() === '';
+		if (Array.isArray(value)) return value.length === 0;
+		if (typeof value === 'object') return Object.keys(value).length === 0;
+		if (typeof value === 'number') return false; // 0 é um valor válido
+		return !value;
+	}
+
+	/**
+	 * Schema de mapeamento para exportação do Subjetivo
+	 * Define como cada campo deve ser formatado e exibido
+	 * @type {any}
+	 */
+	const subjetivoSchema = {
+		identificacao: {
+			title: 'IDENTIFICAÇÃO',
+			fields: {
+				idade: { label: 'Idade', formatter: (/** @type {string} */ v) => v },
+				ocupacao: { label: 'Ocupação', formatter: (/** @type {string} */ v) => v },
+				naturalidade: { label: 'Naturalidade', formatter: (/** @type {string} */ v) => v },
+				acompanhante: { label: 'Acompanhante', formatter: (/** @type {string} */ v) => v },
+				sexo: { label: 'Sexo biológico', formatter: (/** @type {string} */ v) => v },
+				genero: { label: 'Gênero', formatter: (/** @type {string} */ v, /** @type {any} */ obj) => v === 'Outros' ? obj.generoOutro || v : v },
+				raca: { label: 'Raça', formatter: (/** @type {string} */ v, /** @type {any} */ obj) => v === 'Outros' ? obj.racaOutro || v : v },
+				estadoCivil: { label: 'Estado civil', formatter: (/** @type {string} */ v, /** @type {any} */ obj) => v === 'Outros' ? obj.estadoCivilOutro || v : v },
+				escolaridade: { label: 'Escolaridade', formatter: (/** @type {string} */ v, /** @type {any} */ obj) => v === 'Outros' ? obj.escolaridadeOutro || v : v },
+				religiao: { label: 'Religião', formatter: (/** @type {string} */ v, /** @type {any} */ obj) => v === 'Outros' ? obj.religiaoOutro || v : v }
+			}
+		},
+		queixaPrincipal: { label: 'QUEIXA PRINCIPAL', isSimple: true },
+		hma: { label: 'HMA', isSimple: true },
+		revisaoSistemas: { label: 'REVISÃO DE SISTEMAS', isSimple: true },
+		patologicos: {
+			title: 'HISTÓRIA PATOLÓGICA PREGRESSA',
+			fields: {
+				alergia: { label: 'Alergia', formatter: (/** @type {string} */ v) => v },
+				cirurgias: { label: 'Cirurgias', formatter: (/** @type {string} */ v) => v },
+				internacoes: { label: 'Internações', formatter: (/** @type {string} */ v) => v },
+				traumatismos: { label: 'Traumatismos', formatter: (/** @type {string} */ v) => v }
+			}
+		},
+		ocupacional: { label: 'HISTÓRIA OCUPACIONAL', isSimple: true },
+		psicossocial: { label: 'HISTÓRIA PSICOSSOCIAL', isSimple: true },
+		habitos: { label: 'HÁBITOS DE VIDA', isSimple: true },
+		recordatorioAlimentar: {
+			title: 'RECORDATÓRIO ALIMENTAR',
+			fields: {
+				cafeManha: { label: 'Café da manhã', formatter: (/** @type {string} */ v) => v },
+				lancheManha: { label: 'Lanche da manhã', formatter: (/** @type {string} */ v) => v },
+				almoco: { label: 'Almoço', formatter: (/** @type {string} */ v) => v },
+				lancheTarde: { label: 'Lanche da tarde', formatter: (/** @type {string} */ v) => v },
+				cafeTarde: { label: 'Café da tarde', formatter: (/** @type {string} */ v) => v },
+				lancheAntesJantar: { label: 'Lanche antes do jantar', formatter: (/** @type {string} */ v) => v },
+				jantar: { label: 'Jantar', formatter: (/** @type {string} */ v) => v },
+				lancheDepoisJantar: { label: 'Lanche depois do jantar', formatter: (/** @type {string} */ v) => v }
+			}
+		},
+		ginecologica: {
+			title: 'HISTÓRIA GINECOLÓGICA',
+			condition: (/** @type {any} */ data) => data.identificacao?.sexo === 'Feminino',
+			fields: {
+				g: { label: 'G', formatter: (/** @type {string} */ v) => v },
+				p: { label: 'P', formatter: (/** @type {string} */ v) => v },
+				n: { label: 'N', formatter: (/** @type {string} */ v) => v },
+				c: { label: 'C', formatter: (/** @type {string} */ v) => v },
+				a: { label: 'A', formatter: (/** @type {string} */ v) => v },
+				e: { label: 'E', formatter: (/** @type {string} */ v) => v },
+				dum: { label: 'DUM', formatter: (/** @type {string} */ v) => v },
+				mac: { label: 'MAC', formatter: (/** @type {string} */ v) => v }
+			}
+		}
+	};
+
+	/**
+	 * Exporta os dados do Subjetivo para a área de transferência
+	 */
+	async function exportarSubjetivo() {
+		const lines = [];
+		
+		// Título principal
+		lines.push('## ANAMNESE (S)');
+		lines.push('');
+
+		// Itera sobre o schema
+		for (const [key, config] of Object.entries(subjetivoSchema)) {
+			const data = /** @type {any} */ (subjective)[key];
+			
+			// Verifica condição (ex: ginecológica só aparece se sexo feminino)
+			if (config.condition && !config.condition(subjective)) continue;
+			
+			if (config.isSimple) {
+				// Campos simples (string direta)
+				if (!isEmpty(data)) {
+					lines.push(`**${config.label}**`);
+					lines.push(data);
+					lines.push('');
+				}
+			} else if (config.fields) {
+				// Campos compostos (objetos com múltiplos campos)
+				const validFields = [];
+				
+				for (const [fieldKey, fieldConfig] of Object.entries(config.fields)) {
+					const value = data?.[fieldKey];
+					if (!isEmpty(value)) {
+						const formatted = fieldConfig.formatter(value, data);
+						validFields.push(`**${fieldConfig.label}:** ${formatted}`);
+					}
+				}
+				
+				// Só adiciona a seção se houver campos válidos
+				if (validFields.length > 0) {
+					lines.push(`**${config.title}**`);
+					lines.push(...validFields);
+					lines.push('');
+				}
+			}
+		}
+
+		// Doenças estratificadas
+		if (diseases.length > 0) {
+			lines.push('**DOENÇAS ESTRATIFICADAS**');
+			for (const disease of diseases) {
+				const parts = [disease.subcat_desc];
+				if (disease.subcat) parts.push(`(${disease.subcat})`);
+				if (disease.mesAnoDiagnostico) parts.push(`- Diagnóstico: ${disease.mesAnoDiagnostico}`);
+				lines.push(`- ${parts.join(' ')}`);
+				if (disease.historico) lines.push(`  Histórico: ${disease.historico}`);
+				if (disease.queixasAtuais) lines.push(`  Queixas atuais: ${disease.queixasAtuais}`);
+			}
+			lines.push('');
+		}
+
+		// Medicamentos
+		if (medications.length > 0) {
+			lines.push('**MEDICAMENTOS EM USO**');
+			for (const med of medications) {
+				const freq = describeFrequency(med);
+				lines.push(`- ${med.principio_ativo} ${med.concentracao ? `(${med.concentracao})` : ''} - ${freq}`);
+				if (med.observacoes) lines.push(`  Obs: ${med.observacoes}`);
+			}
+			lines.push('');
+		}
+
+		// História familiar
+		const familyHistoryEntries = Object.entries(familyHistory).filter(([_, entry]) => entry.checked);
+		if (familyHistoryEntries.length > 0) {
+			lines.push('**HISTÓRIA FAMILIAR**');
+			for (const [key, entry] of familyHistoryEntries) {
+				const option = familyHistoryOptions.find((o) => o.id === key);
+				if (!option) continue;
+				const parentes = entry.parentes.filter((p) => p.parentesco || p.idade).map((p) => {
+					return [p.parentesco, p.idade].filter(Boolean).join(' - ');
+				});
+				if (parentes.length > 0) {
+					lines.push(`- ${option.label}: ${parentes.join(', ')}`);
+				} else {
+					lines.push(`- ${option.label}`);
+				}
+				if (entry.detalhes) lines.push(`  Detalhes: ${entry.detalhes}`);
+			}
+			lines.push('');
+		}
+
+		const finalText = lines.join('\n');
+
+		try {
+			await navigator.clipboard.writeText(finalText);
+			aviso = 'Anamnese (Subjetivo) copiada para a área de transferência!';
+			setTimeout(() => (aviso = ''), 3000);
+		} catch (err) {
+			erro = 'Erro ao copiar para a área de transferência. Tente novamente.';
+		}
+	}
+
+	/**
+	 * Exporta os dados do Objetivo para a área de transferência
+	 */
+	async function exportarObjetivo() {
+		const lines = [];
+
+		lines.push('## EXAME FÍSICO E TESTES (O)');
+		lines.push('');
+
+		// Sinais Vitais
+		const sv = objective.sinaisVitais;
+		const sinaisVitaisPreenchidos = sv.pas || sv.pad || sv.temperatura || sv.frequenciaCardiaca || sv.frequenciaRespiratoria || sv.spo2;
+		if (sinaisVitaisPreenchidos) {
+			lines.push('**SINAIS VITAIS**');
+			if (sv.pas || sv.pad) lines.push(`- **PA:** ${sv.pas || '--'}/${sv.pad || '--'} mmHg`);
+			if (sv.temperatura) lines.push(`- **Temperatura:** ${sv.temperatura} °C`);
+			if (sv.frequenciaCardiaca) lines.push(`- **FC:** ${sv.frequenciaCardiaca} bpm`);
+			if (sv.frequenciaRespiratoria) lines.push(`- **FR:** ${sv.frequenciaRespiratoria} irpm`);
+			if (sv.spo2) lines.push(`- **SpO2:** ${sv.spo2} %`);
+			lines.push('');
+		}
+
+		// Antropometria
+		const ant = objective.antropometria;
+		const antropometriaPreenchida = ant.altura || ant.peso || ant.circunferenciaAbdominal || ant.imc;
+		if (antropometriaPreenchida) {
+			lines.push('**ANTROPOMETRIA**');
+			if (ant.altura) lines.push(`- **Altura:** ${ant.altura} cm`);
+			if (ant.peso) lines.push(`- **Peso:** ${ant.peso} kg`);
+			if (ant.circunferenciaAbdominal) lines.push(`- **Circunferência Abdominal:** ${ant.circunferenciaAbdominal} cm`);
+			if (ant.imc) lines.push(`- **IMC:** ${ant.imc} kg/m²`);
+			lines.push('');
+		}
+
+		// Exame Físico
+		const ef = objective.exameFisico;
+		const exameFisicoPreenchido = ef.geral || ef.aparelhoDigestorio || ef.aparelhoCardiovascular || ef.sistemaLinfatico || ef.neurologico || ef.respiratorioInferior || ef.respiratorioSuperior || ef.ginecologico;
+		if (exameFisicoPreenchido) {
+			lines.push('**EXAME FÍSICO**');
+			if (ef.geral) lines.push(`- **Geral:** ${ef.geral}`);
+			if (ef.aparelhoDigestorio) lines.push(`- **Aparelho Digestório:** ${ef.aparelhoDigestorio}`);
+			if (ef.aparelhoCardiovascular) lines.push(`- **Aparelho Cardiovascular:** ${ef.aparelhoCardiovascular}`);
+			if (ef.sistemaLinfatico) lines.push(`- **Sistema Linfático:** ${ef.sistemaLinfatico}`);
+			if (ef.neurologico) lines.push(`- **Neurológico:** ${ef.neurologico}`);
+			if (ef.respiratorioInferior) lines.push(`- **Respiratório Inferior:** ${ef.respiratorioInferior}`);
+			if (ef.respiratorioSuperior) lines.push(`- **Respiratório Superior (ORL):** ${ef.respiratorioSuperior}`);
+			if (ef.ginecologico) lines.push(`- **Exame Ginecológico:** ${ef.ginecologico}`);
+			lines.push('');
+		}
+
+		// Exames Laboratoriais
+		if (laboratorioSelecionados.length > 0) {
+			lines.push('**EXAMES LABORATORIAIS**');
+			for (const [pacote, itens] of Object.entries(laboratorioAgrupado)) {
+				lines.push(`*${pacote}:*`);
+				for (const item of itens) {
+					const resultado = item.resultado ? ` = ${item.resultado}` : '';
+					lines.push(`- ${item.nome}${resultado}`);
+				}
+			}
+			lines.push('');
+		}
+
+		// Exames de Imagem
+		if (imagemSelecionados.length > 0) {
+			lines.push('**EXAMES DE IMAGEM E FUNCIONAIS**');
+			for (const item of imagemSelecionados) {
+				lines.push(`- **${item.nome}**`);
+				if (item.motivo) lines.push(`  - Motivo: ${item.motivo}`);
+				if (item.resultado) lines.push(`  - Resultado: ${item.resultado}`);
+				if (item.medicoExecutor) lines.push(`  - Médico: ${item.medicoExecutor}`);
+			}
+			lines.push('');
+		}
+
+		const finalText = lines.join('\n');
+
+		try {
+			await navigator.clipboard.writeText(finalText);
+			aviso = 'Exame Físico e Testes (Objetivo) copiados para a área de transferência!';
+			setTimeout(() => (aviso = ''), 3000);
+		} catch (err) {
+			erro = 'Erro ao copiar para a área de transferência. Tente novamente.';
+		}
+	}
+
+	// ==========================================
+	// FUNÇÕES DE EXAMES LABORATORIAIS
+	// ==========================================
+
+	function openLaboratoryModal() {
+		labModo = 'pacote';
+		labPacoteSelecionado = '';
+		labExameManual = { nome: '', valoresReferencia: '', unidade: '' };
+		labSearch = '';
+		labSearchResults = [];
+		labDialogRef?.showModal();
+	}
+
+	function closeLaboratoryModal() {
+		labDialogRef?.close();
+	}
+
+	async function buscarExamesLaboratoriais() {
+		labLoading = true;
+		try {
+			const params = new URLSearchParams({ page: '1', limit: '100' });
+			if (labSearch.trim()) params.set('q', labSearch.trim());
+			if (labPacoteSelecionado) params.set('pacote', labPacoteSelecionado);
+
+			const response = await fetch(`/api/exames?${params.toString()}`);
+			const data = await response.json();
+			if (!response.ok) throw new Error(data?.error || 'Falha ao buscar exames.');
+			labSearchResults = data.items ?? [];
+		} catch (e) {
+			erro = e instanceof Error ? e.message : 'Erro ao buscar exames.';
+		} finally {
+			labLoading = false;
+		}
+	}
+
+	function scheduleLabSearch() {
+		clearTimeout(labSearchTimer);
+		labSearchTimer = setTimeout(buscarExamesLaboratoriais, 250);
+	}
+
+	/**
+	 * @param {{ nome: string; pacote?: string | null; valores_referencia?: string | null; unidade_medida?: string | null; }} exame
+	 */
+	function adicionarExameLaboratorial(exame) {
+		const novoExame = {
+			id: createId(),
+			nome: exame.nome,
+			pacote: exame.pacote || labPacoteSelecionado || 'Exame Avulso',
+			valoresReferencia: exame.valores_referencia || '',
+			unidade: exame.unidade_medida || '',
+			resultado: '',
+			selecionado: false
+		};
+		laboratorioSelecionados = [...laboratorioSelecionados, novoExame];
+	}
+
+	function adicionarExameLaboratorialManual() {
+		if (!labExameManual.nome.trim()) {
+			erro = 'Informe o nome do exame.';
+			return;
+		}
+		const novoExame = {
+			id: createId(),
+			nome: labExameManual.nome.trim(),
+			pacote: 'Exame Manual',
+			valoresReferencia: labExameManual.valoresReferencia.trim(),
+			unidade: labExameManual.unidade.trim(),
+			resultado: '',
+			selecionado: false
+		};
+		laboratorioSelecionados = [...laboratorioSelecionados, novoExame];
+		labExameManual = { nome: '', valoresReferencia: '', unidade: '' };
+	}
+
+	/**
+	 * @param {string} id
+	 */
+	function excluirLaboratorio(id) {
+		if (!window.confirm('Excluir este exame?')) return;
+		laboratorioSelecionados = [...laboratorioSelecionados.filter((item) => item.id !== id)];
+	}
+
+	function excluirLaboratorioSelecionados() {
+		if (!window.confirm('Excluir os exames selecionados?')) return;
+		laboratorioSelecionados = [...laboratorioSelecionados.filter((item) => !item.selecionado)];
+	}
+
+	function toggleTodosLaboratorio() {
+		const novoEstado = !laboratorioSelecionadosTodos;
+		laboratorioSelecionados = laboratorioSelecionados.map((item) => ({ ...item, selecionado: novoEstado }));
+	}
+
+	/**
+	 * @param {any[]} itens
+	 */
+	function toggleGrupoLaboratorio(itens) {
+		const novoEstado = !itens.every((i) => i.selecionado);
+		const idsDoGrupo = new Set(itens.map((i) => i.id));
+		laboratorioSelecionados = laboratorioSelecionados.map((item) =>
+			idsDoGrupo.has(item.id) ? { ...item, selecionado: novoEstado } : item
+		);
+	}
+
+	// ==========================================
+	// FUNÇÕES DE EXAMES DE IMAGEM/FUNCIONAIS
+	// ==========================================
+
+	function openImagemModal() {
+		imagemExameManual = '';
+		imagemSearch = '';
+		imagemSearchResults = [];
+		imagemDialogRef?.showModal();
+	}
+
+	function closeImagemModal() {
+		imagemDialogRef?.close();
+	}
+
+	async function buscarProcedimentos() {
+		imagemLoading = true;
+		try {
+			const params = new URLSearchParams({ page: '1', limit: '50' });
+			if (imagemSearch.trim()) params.set('q', imagemSearch.trim());
+
+			const response = await fetch(`/api/procedimentos?${params.toString()}`);
+			const data = await response.json();
+			if (!response.ok) throw new Error(data?.error || 'Falha ao buscar procedimentos.');
+			imagemSearchResults = data.items ?? [];
+		} catch (e) {
+			erro = e instanceof Error ? e.message : 'Erro ao buscar procedimentos.';
+		} finally {
+			imagemLoading = false;
+		}
+	}
+
+	function scheduleImagemSearch() {
+		clearTimeout(imagemSearchTimer);
+		imagemSearchTimer = setTimeout(buscarProcedimentos, 250);
+	}
+
+	/**
+	 * @param {{ descricao: string; }} procedimento
+	 */
+	function adicionarExameImagem(procedimento) {
+		const novoExame = {
+			id: createId(),
+			nome: procedimento.descricao,
+			motivo: '',
+			resultado: '',
+			medicoExecutor: ''
+		};
+		imagemSelecionados = [...imagemSelecionados, novoExame];
+	}
+
+	function adicionarExameImagemManual() {
+		if (!imagemExameManual.trim()) {
+			erro = 'Informe o nome do exame.';
+			return;
+		}
+		const novoExame = {
+			id: createId(),
+			nome: imagemExameManual.trim(),
+			motivo: '',
+			resultado: '',
+			medicoExecutor: ''
+		};
+		imagemSelecionados = [...imagemSelecionados, novoExame];
+		imagemExameManual = '';
+	}
+
+	/**
+	 * @param {string} id
+	 */
+	function excluirImagem(id) {
+		if (!window.confirm('Excluir este exame?')) return;
+		imagemSelecionados = [...imagemSelecionados.filter((item) => item.id !== id)];
+	}
+
 	onMount(() => {
 		let loaded = false;
 		const unsubscribe = consultaDraft.subscribe((draft) => {
@@ -773,12 +1322,30 @@
 				draftHydrated = true;
 			}
 		});
+
+		// Carrega doenças e medicamentos de forma independente com reatividade garantida
+		const storedDiseases = loadFromLocalStorage(DISEASES_STORAGE_KEY, []);
+		const storedMedications = loadFromLocalStorage(MEDICATIONS_STORAGE_KEY, []);
+		
+		if (Array.isArray(storedDiseases) && storedDiseases.length > 0) {
+			diseases = [...storedDiseases]; // Reatividade por propagação
+		}
+		if (Array.isArray(storedMedications) && storedMedications.length > 0) {
+			medications = storedMedications.map((item) => ({
+				...item,
+				diario: normalizeDailyFrequency(item.diario),
+				doseQual: item.doseQual || ''
+			})); // Reatividade por propagação via map
+		}
+
 		carregarGuias();
 		return unsubscribe;
 	});
 	onDestroy(() => {
 		clearTimeout(diseaseSearchTimer);
 		clearTimeout(medicationSearchTimer);
+		clearTimeout(labSearchTimer);
+		clearTimeout(imagemSearchTimer);
 	});
 </script>
 
@@ -831,7 +1398,16 @@
 						<p class="text-xs uppercase tracking-[0.28em] text-slate-300">SOAP</p>
 						<h2 class="text-lg font-semibold">S | Subjetivo</h2>
 					</div>
-					<span class="rounded-full border border-white/20 px-3 py-1 text-xs text-slate-200">História clínica</span>
+					<div class="flex items-center gap-3">
+						<button
+							type="button"
+							on:click|stopPropagation={exportarSubjetivo}
+							class="rounded-full border border-emerald-400/50 bg-emerald-500/20 px-4 py-1.5 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/30"
+						>
+							Copiar Anamnese (S)
+						</button>
+						<span class="rounded-full border border-white/20 px-3 py-1 text-xs text-slate-200">História clínica</span>
+					</div>
 				</summary>
 
 				<div class="space-y-4 p-4">
@@ -1107,7 +1683,7 @@
 															<div class="min-w-0 space-y-1">
 																<p class="text-base font-semibold text-slate-900">{item.principio_ativo}</p>
 																<p class="text-sm text-slate-700">{[item.concentracao, item.forma_farmaceutica].filter(Boolean).join(' • ') || 'Concentração e forma não informadas'}</p>
-																<p class="text-xs text-slate-700">{item.dose} - {describeFrequency(item)}</p>
+																<p class="text-xs text-slate-700">{describeFrequency(item)}</p>
 																{#if item.observacoes}
 																	<p class="pt-1 text-xs text-slate-600">{item.observacoes}</p>
 																{/if}
@@ -1307,28 +1883,282 @@
 						<p class="text-xs uppercase tracking-[0.28em] text-slate-300">SOAP</p>
 						<h2 class="text-lg font-semibold">O | Objetivo</h2>
 					</div>
-					<span class="rounded-full border border-white/20 px-3 py-1 text-xs text-slate-200">Exame físico e métricas</span>
+					<div class="flex items-center gap-3">
+						<button
+							type="button"
+							on:click|stopPropagation={exportarObjetivo}
+							class="rounded-full border border-emerald-400/50 bg-emerald-500/20 px-4 py-1.5 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/30"
+						>
+							Copiar Exame Físico e Testes (O)
+						</button>
+						<span class="rounded-full border border-white/20 px-3 py-1 text-xs text-slate-200">Exame físico e métricas</span>
+					</div>
 				</summary>
-				<div class="grid gap-4 p-4 lg:grid-cols-[1.25fr_1fr]">
-					<section class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-						<h3 class="text-sm font-semibold text-slate-900">Sinais vitais e exame físico</h3>
-						<p class="mt-1 text-xs text-slate-500">Template visual preparado para campos estruturados e narrativa do exame objetivo.</p>
-						<div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-							<div class="rounded-2xl border border-dashed border-slate-300 bg-white px-3 py-4 text-center text-xs text-slate-500">PA</div>
-							<div class="rounded-2xl border border-dashed border-slate-300 bg-white px-3 py-4 text-center text-xs text-slate-500">FC</div>
-							<div class="rounded-2xl border border-dashed border-slate-300 bg-white px-3 py-4 text-center text-xs text-slate-500">FR</div>
-							<div class="rounded-2xl border border-dashed border-slate-300 bg-white px-3 py-4 text-center text-xs text-slate-500">Temperatura</div>
+
+				<div class="space-y-4 p-4">
+					<!-- Sinais Vitais -->
+					<details open class="rounded-2xl border border-slate-200 bg-slate-50/70">
+						<summary class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold text-slate-900">
+							<span>Sinais Vitais</span>
+							<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+						</summary>
+						<div class="grid gap-3 px-4 pb-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>PAS (mmHg)</span>
+								<input type="number" bind:value={objective.sinaisVitais.pas} placeholder="120" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>PAD (mmHg)</span>
+								<input type="number" bind:value={objective.sinaisVitais.pad} placeholder="80" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>Temperatura (°C)</span>
+								<input type="number" step="0.1" bind:value={objective.sinaisVitais.temperatura} placeholder="36.5" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>FC (bpm)</span>
+								<input type="number" bind:value={objective.sinaisVitais.frequenciaCardiaca} placeholder="72" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>FR (irpm)</span>
+								<input type="number" bind:value={objective.sinaisVitais.frequenciaRespiratoria} placeholder="16" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>SpO2 (%)</span>
+								<input type="number" bind:value={objective.sinaisVitais.spo2} placeholder="98" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
 						</div>
-						<textarea use:autogrow bind:value={objective.exameFisico} rows="5" placeholder="Campo livre para ectoscopia, exame segmentar e achados relevantes." class="mt-4 w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
-					</section>
-					<section class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-						<h3 class="text-sm font-semibold text-slate-900">Exames complementares</h3>
-						<p class="mt-1 text-xs text-slate-500">Espaço pronto para futura tabela de exames laboratoriais e imagem.</p>
-						<div class="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-xs text-slate-500">
-							Futuro slot para vincular exames cadastrados em [Exames Laboratoriais].
+					</details>
+
+					<!-- Dados Antropométricos -->
+					<details open class="rounded-2xl border border-slate-200 bg-slate-50/70">
+						<summary class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold text-slate-900">
+							<span>Dados Antropométricos</span>
+							<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+						</summary>
+						<div class="grid gap-3 px-4 pb-4 sm:grid-cols-2 lg:grid-cols-4">
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>Altura (cm)</span>
+								<input type="number" bind:value={objective.antropometria.altura} placeholder="170" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>Peso (kg)</span>
+								<input type="number" step="0.1" bind:value={objective.antropometria.peso} placeholder="70.5" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>Circunferência Abdominal (cm)</span>
+								<input type="number" step="0.1" bind:value={objective.antropometria.circunferenciaAbdominal} placeholder="85.0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+							</label>
+							<label class="space-y-1 text-xs text-slate-700">
+								<span>IMC (calculado)</span>
+								<input type="text" readonly bind:value={objective.antropometria.imc} placeholder="--" class="w-full rounded-xl border border-slate-300 bg-slate-100 px-3 py-2 font-semibold text-slate-700 outline-none" />
+							</label>
 						</div>
-						<textarea use:autogrow bind:value={objective.examesComplementares} rows="5" placeholder="Resumo de laudos, tendência temporal e correlação com a clínica." class="mt-4 w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
-					</section>
+					</details>
+
+					<!-- Exame Físico -->
+					<details open class="rounded-2xl border border-slate-200 bg-slate-50/70">
+						<summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Exame Físico</summary>
+						<div class="space-y-3 px-4 pb-4">
+							<!-- Geral -->
+							<div class="rounded-2xl border border-slate-200 bg-white p-3">
+								<div class="mb-2 flex items-center gap-2">
+									<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+									<span class="text-xs font-semibold text-slate-700">Geral (Ectoscopia, estado geral, consciência)</span>
+								</div>
+								<textarea use:autogrow bind:value={objective.exameFisico.geral} rows="3" placeholder="Descreva o estado geral, consciência, marcha, ectoscopia..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+							</div>
+
+							<!-- Aparelho Digestório -->
+							<div class="rounded-2xl border border-slate-200 bg-white p-3">
+								<div class="mb-2 flex items-center gap-2">
+									<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+									<span class="text-xs font-semibold text-slate-700">Aparelho Digestório</span>
+								</div>
+								<textarea use:autogrow bind:value={objective.exameFisico.aparelhoDigestorio} rows="3" placeholder="Inspeção, palpação, percussão, ausculta abdominal..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+							</div>
+
+							<!-- Aparelho Cardiovascular -->
+							<div class="rounded-2xl border border-slate-200 bg-white p-3">
+								<div class="mb-2 flex items-center gap-2">
+									<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+									<span class="text-xs font-semibold text-slate-700">Aparelho Cardiovascular</span>
+								</div>
+								<textarea use:autogrow bind:value={objective.exameFisico.aparelhoCardiovascular} rows="3" placeholder="Inspeção, palpação, ausculta cardíaca e periférica..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+							</div>
+
+							<!-- Sistema Linfático -->
+							<div class="rounded-2xl border border-slate-200 bg-white p-3">
+								<div class="mb-2 flex items-center gap-2">
+									<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+									<span class="text-xs font-semibold text-slate-700">Sistema Linfático</span>
+								</div>
+								<textarea use:autogrow bind:value={objective.exameFisico.sistemaLinfatico} rows="2" placeholder="Linfonodos palpáveis, características..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+							</div>
+
+							<!-- Neurológico -->
+							<div class="rounded-2xl border border-slate-200 bg-white p-3">
+								<div class="mb-2 flex items-center gap-2">
+									<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+									<span class="text-xs font-semibold text-slate-700">Neurológico</span>
+								</div>
+								<textarea use:autogrow bind:value={objective.exameFisico.neurologico} rows="3" placeholder="Nível de consciência, pupilas, força muscular, sensibilidade, reflexos..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+							</div>
+
+							<!-- Respiratório Inferior -->
+							<div class="rounded-2xl border border-slate-200 bg-white p-3">
+								<div class="mb-2 flex items-center gap-2">
+									<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+									<span class="text-xs font-semibold text-slate-700">Respiratório Inferior</span>
+								</div>
+								<textarea use:autogrow bind:value={objective.exameFisico.respiratorioInferior} rows="3" placeholder="Inspeção torácica, expansibilidade, percussão, ausculta pulmonar..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+							</div>
+
+							<!-- Respiratório Superior -->
+							<div class="rounded-2xl border border-slate-200 bg-white p-3">
+								<div class="mb-2 flex items-center gap-2">
+									<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+									<span class="text-xs font-semibold text-slate-700">Respiratório Superior (ORL)</span>
+								</div>
+								<textarea use:autogrow bind:value={objective.exameFisico.respiratorioSuperior} rows="3" placeholder="Orofaringe, cavidade nasal, ouvido externo e médio..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+							</div>
+
+							<!-- Exame Ginecológico (condicional) -->
+							{#if subjective.identificacao.sexo === 'Feminino'}
+								<div class="rounded-2xl border border-slate-200 bg-white p-3">
+									<div class="mb-2 flex items-center gap-2">
+										<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
+										<span class="text-xs font-semibold text-slate-700">Exame Ginecológico</span>
+									</div>
+									<textarea use:autogrow bind:value={objective.exameFisico.ginecologico} rows="3" placeholder="Inspeção, palpação mamária, exame especular, toque vaginal..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+								</div>
+							{/if}
+						</div>
+					</details>
+
+					<!-- Exames Laboratoriais -->
+					<details open class="rounded-2xl border border-slate-200 bg-slate-50/70">
+						<summary class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold text-slate-900">
+							<span>Exames Laboratoriais</span>
+							<button
+								type="button"
+								on:click|stopPropagation={() => openLaboratoryModal()}
+								class="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
+							>
+								+ Adicionar
+							</button>
+						</summary>
+						<div class="px-4 pb-4">
+							{#if laboratorioSelecionados.length === 0}
+								<div class="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-xs text-slate-500">
+									Nenhum exame laboratorial adicionado.
+								</div>
+							{:else}
+								<div class="space-y-4">
+									<!-- Botão excluir selecionados -->
+									<div class="flex items-center justify-between">
+										<label class="flex items-center gap-2 text-xs text-slate-700">
+											<input type="checkbox" checked={laboratorioSelecionadosTodos} on:change={toggleTodosLaboratorio} />
+											Selecionar todos
+										</label>
+										{#if laboratorioSelecionados.some(item => item.selecionado)}
+											<button
+												type="button"
+												on:click={excluirLaboratorioSelecionados}
+												class="rounded-full border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+											>
+												Excluir Selecionados
+											</button>
+										{/if}
+									</div>
+
+									{#each Object.entries(laboratorioAgrupado) as [pacote, itens]}
+										<div class="rounded-2xl border border-slate-200 bg-white p-3">
+											<h4 class="mb-2 text-xs font-semibold text-slate-900">{pacote || 'Exames Avulsos'}</h4>
+											<div class="overflow-x-auto">
+												<table class="w-full text-xs">
+													<thead class="bg-slate-100 text-slate-700">
+														<tr>
+															<th class="px-2 py-1 text-left"><input type="checkbox" checked={itens.every(i => i.selecionado)} on:change={() => toggleGrupoLaboratorio(itens)} /></th>
+															<th class="px-2 py-1 text-left">Exame</th>
+															<th class="px-2 py-1 text-left">Referência</th>
+															<th class="px-2 py-1 text-left">Unidade</th>
+															<th class="px-2 py-1 text-left">Resultado</th>
+															<th class="px-2 py-1 text-center">Ação</th>
+														</tr>
+													</thead>
+													<tbody>
+														{#each itens as item}
+															<tr class="border-t border-slate-100">
+																<td class="px-2 py-1"><input type="checkbox" bind:checked={item.selecionado} /></td>
+																<td class="px-2 py-1">{item.nome}</td>
+																<td class="px-2 py-1 text-slate-500">{item.valoresReferencia || '-'}</td>
+																<td class="px-2 py-1 text-slate-500">{item.unidade || '-'}</td>
+																<td class="px-2 py-1"><input bind:value={item.resultado} placeholder="Resultado..." class="w-full rounded border border-slate-300 px-2 py-1 text-xs" /></td>
+																<td class="px-2 py-1 text-center">
+																	<button type="button" on:click={() => excluirLaboratorio(item.id)} class="text-slate-400 hover:text-red-600" aria-label="Excluir exame">
+																		<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+																	</button>
+																</td>
+															</tr>
+														{/each}
+													</tbody>
+												</table>
+											</div>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					</details>
+
+					<!-- Exames de Imagem e Funcionais -->
+					<details open class="rounded-2xl border border-slate-200 bg-slate-50/70">
+						<summary class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold text-slate-900">
+							<span>Exames de Imagem e Funcionais</span>
+							<button
+								type="button"
+								on:click|stopPropagation={() => openImagemModal()}
+								class="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
+							>
+								+ Adicionar
+							</button>
+						</summary>
+						<div class="px-4 pb-4">
+							{#if imagemSelecionados.length === 0}
+								<div class="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-xs text-slate-500">
+									Nenhum exame de imagem ou funcional adicionado.
+								</div>
+							{:else}
+								<div class="grid gap-3 lg:grid-cols-2">
+									{#each imagemSelecionados as item}
+										<div class="rounded-2xl border border-slate-200 bg-white p-3">
+											<div class="mb-2 flex items-center justify-between">
+												<h4 class="text-sm font-semibold text-slate-900">{item.nome}</h4>
+												<button type="button" on:click={() => excluirImagem(item.id)} class="text-slate-400 hover:text-red-600" aria-label="Excluir exame de imagem">
+													<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+												</button>
+											</div>
+											<div class="space-y-2">
+												<label class="block text-xs text-slate-700">
+													<span class="mb-1 block">Motivo do exame</span>
+													<input bind:value={item.motivo} placeholder="Indicação clínica..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" />
+												</label>
+												<label class="block text-xs text-slate-700">
+													<span class="mb-1 block">Resultado / Impressões Diagnósticas</span>
+													<textarea use:autogrow bind:value={item.resultado} rows="2" placeholder="Descreva os achados..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs"></textarea>
+												</label>
+												<label class="block text-xs text-slate-700">
+													<span class="mb-1 block">Médico executor</span>
+													<input bind:value={item.medicoExecutor} placeholder="Nome do médico..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" />
+												</label>
+											</div>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					</details>
 				</div>
 			</details>
 
@@ -1552,10 +2382,6 @@
 						<span>Forma farmacêutica</span>
 						<input readonly={!medicationManualMode} bind:value={medicationForm.forma_farmaceutica} class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200 read-only:border-slate-200 read-only:bg-slate-100 read-only:text-slate-600" />
 					</label>
-					<label class="space-y-1 text-xs text-slate-700">
-						<span>Dose física</span>
-						<input bind:value={medicationForm.dose} placeholder="1 comprimido, 20 UI, 5 mL" class="w-full rounded-2xl border border-slate-500 bg-white px-3 py-2 font-semibold text-slate-900 outline-none ring-2 ring-slate-200 focus:border-slate-700 focus:ring-slate-300" />
-					</label>
 					<label class="space-y-1 text-xs text-slate-700 md:col-span-2">
 						<span>Classe farmacêutica</span>
 						<input bind:value={medicationForm.classe} class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
@@ -1563,7 +2389,7 @@
 				</div>
 
 				<section class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-					<h3 class="text-sm font-semibold text-slate-900">Frequência</h3>
+					<h3 class="text-sm font-semibold text-slate-900">Dose e Frequência</h3>
 					<div class="mt-3 flex flex-wrap gap-2 text-xs">
 						<label class="rounded-full border border-slate-300 bg-white px-3 py-1.5"><input class="mr-1" type="radio" bind:group={medicationForm.frequenciaTipo} value="diario" />Diário</label>
 						<label class="rounded-full border border-slate-300 bg-white px-3 py-1.5"><input class="mr-1" type="radio" bind:group={medicationForm.frequenciaTipo} value="semanal" />Semanal</label>
@@ -1594,6 +2420,10 @@
 							<option>Segunda a sexta</option>
 							<option>Fim de semana</option>
 						</select>
+						<label class="mt-3 block space-y-1 text-xs text-slate-700">
+							<span>Qual a dose?</span>
+							<input bind:value={medicationForm.doseQual} placeholder="Ex: 1 comprimido, 20 UI, 5 mL" class="w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+						</label>
 					{:else if medicationForm.frequenciaTipo === 'intervalo'}
 						<select bind:value={medicationForm.intervalo} class="mt-3 w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200">
 							<option>12h</option>
@@ -1601,6 +2431,10 @@
 							<option>6h</option>
 							<option>4h</option>
 						</select>
+						<label class="mt-3 block space-y-1 text-xs text-slate-700">
+							<span>Qual a dose?</span>
+							<input bind:value={medicationForm.doseQual} placeholder="Ex: 1 comprimido, 20 UI, 5 mL" class="w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+						</label>
 					{:else}
 						<input bind:value={medicationForm.especial} placeholder="Ex: usar se dor, antes de dormir, em jejum..." class="mt-3 w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
 					{/if}
@@ -1616,6 +2450,128 @@
 		<div class="mt-5 flex justify-end gap-2">
 			<button type="button" on:click={closeMedicationModal} class="rounded-full border border-slate-300 px-4 py-2 text-xs text-slate-600 hover:bg-slate-100">Cancelar</button>
 			<button type="button" on:click={saveMedication} class="rounded-full bg-slate-900 px-4 py-2 text-xs font-medium text-white hover:bg-slate-800">Salvar medicamento</button>
+		</div>
+	</div>
+</dialog>
+
+<!-- Modal Exames Laboratoriais -->
+<dialog bind:this={labDialogRef} class="w-full max-w-4xl rounded-3xl p-0 backdrop:bg-slate-950/30">
+	<div class="rounded-3xl border border-slate-200 bg-white p-5">
+		<div class="border-b border-slate-200 pb-4">
+			<h2 class="text-lg font-semibold text-slate-900">Adicionar Exame Laboratorial</h2>
+			<p class="text-xs text-slate-500">Busque por pacote ou adicione um exame manualmente.</p>
+		</div>
+
+		<div class="mt-4 space-y-3">
+			<div class="flex gap-2">
+				<button type="button" on:click={() => (labModo = 'pacote')} class={`rounded-full px-4 py-2 text-xs ${labModo === 'pacote' ? 'bg-slate-900 text-white' : 'border border-slate-300 text-slate-600 hover:bg-slate-100'}`}>Por Pacote</button>
+				<button type="button" on:click={() => (labModo = 'manual')} class={`rounded-full px-4 py-2 text-xs ${labModo === 'manual' ? 'bg-slate-900 text-white' : 'border border-slate-300 text-slate-600 hover:bg-slate-100'}`}>Manual</button>
+			</div>
+
+			{#if labModo === 'pacote'}
+				<div class="grid gap-3 lg:grid-cols-2">
+					<label class="space-y-1 text-xs text-slate-700">
+						<span>Buscar exame</span>
+						<input bind:value={labSearch} on:input={scheduleLabSearch} placeholder="Ex: hemograma, glicose..." class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+					</label>
+					<label class="space-y-1 text-xs text-slate-700">
+						<span>Ou selecione um pacote</span>
+						<select bind:value={labPacoteSelecionado} on:change={buscarExamesLaboratoriais} class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200">
+							<option value="">Todos os exames</option>
+							<option value="Check-up">Check-up</option>
+							<option value="Cardiológico">Cardiológico</option>
+							<option value="Renal">Renal</option>
+							<option value="Hepático">Hepático</option>
+							<option value="Ginecológico">Ginecológico</option>
+							<option value="Pré-operatório">Pré-operatório</option>
+						</select>
+					</label>
+				</div>
+
+				{#if labLoading || labSearchResults.length > 0}
+					<div class="rounded-2xl border border-slate-200 bg-slate-50 p-2">
+						{#if labLoading}
+							<p class="px-3 py-10 text-center text-xs text-slate-500">Buscando exames...</p>
+						{:else}
+							<div class="max-h-60 space-y-2 overflow-y-auto">
+								{#each labSearchResults as exame}
+									<button type="button" on:click={() => adicionarExameLaboratorial(exame)} class="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100">
+										<p class="text-sm font-semibold text-slate-900">{exame.nome}</p>
+										<p class="mt-1 text-xs text-slate-500">{exame.pacote || 'Exame Avulso'} {exame.valores_referencia ? `• Ref: ${exame.valores_referencia}` : ''}</p>
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
+			{:else}
+				<div class="grid gap-3">
+					<label class="space-y-1 text-xs text-slate-700">
+						<span>Nome do exame</span>
+						<input bind:value={labExameManual.nome} placeholder="Ex: Glicose em jejum" class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+					</label>
+					<div class="grid gap-3 sm:grid-cols-2">
+						<label class="space-y-1 text-xs text-slate-700">
+							<span>Valores de Referência</span>
+							<input bind:value={labExameManual.valoresReferencia} placeholder="Ex: 70-100 mg/dL" class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+						</label>
+						<label class="space-y-1 text-xs text-slate-700">
+							<span>Unidade</span>
+							<input bind:value={labExameManual.unidade} placeholder="Ex: mg/dL" class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+						</label>
+					</div>
+					<button type="button" on:click={adicionarExameLaboratorialManual} class="rounded-full bg-slate-900 px-4 py-2 text-xs font-medium text-white hover:bg-slate-800">Adicionar Exame</button>
+				</div>
+			{/if}
+		</div>
+
+		<div class="mt-5 flex justify-end gap-2">
+			<button type="button" on:click={closeLaboratoryModal} class="rounded-full border border-slate-300 px-4 py-2 text-xs text-slate-600 hover:bg-slate-100">Fechar</button>
+		</div>
+	</div>
+</dialog>
+
+<!-- Modal Exames de Imagem -->
+<dialog bind:this={imagemDialogRef} class="w-full max-w-4xl rounded-3xl p-0 backdrop:bg-slate-950/30">
+	<div class="rounded-3xl border border-slate-200 bg-white p-5">
+		<div class="border-b border-slate-200 pb-4">
+			<h2 class="text-lg font-semibold text-slate-900">Adicionar Exame de Imagem/Funcional</h2>
+			<p class="text-xs text-slate-500">Busque na base de procedimentos ou adicione manualmente.</p>
+		</div>
+
+		<div class="mt-4 space-y-3">
+			<label class="space-y-1 text-xs text-slate-700">
+				<span>Buscar procedimento</span>
+				<input bind:value={imagemSearch} on:input={scheduleImagemSearch} placeholder="Ex: radiografia, tomografia..." class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+			</label>
+
+			{#if imagemLoading || imagemSearchResults.length > 0}
+				<div class="rounded-2xl border border-slate-200 bg-slate-50 p-2">
+					{#if imagemLoading}
+						<p class="px-3 py-10 text-center text-xs text-slate-500">Buscando procedimentos...</p>
+					{:else}
+						<div class="max-h-60 space-y-2 overflow-y-auto">
+							{#each imagemSearchResults as proc}
+								<button type="button" on:click={() => adicionarExameImagem(proc)} class="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100">
+									<p class="text-sm font-semibold text-slate-900">{proc.descricao}</p>
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<div class="border-t border-slate-200 pt-3">
+				<p class="mb-2 text-xs font-semibold text-slate-700">Ou adicione manualmente:</p>
+				<div class="flex gap-2">
+					<input bind:value={imagemExameManual} placeholder="Nome do exame" class="flex-1 rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+					<button type="button" on:click={adicionarExameImagemManual} class="rounded-full bg-slate-900 px-4 py-2 text-xs font-medium text-white hover:bg-slate-800">Adicionar</button>
+				</div>
+			</div>
+		</div>
+
+		<div class="mt-5 flex justify-end gap-2">
+			<button type="button" on:click={closeImagemModal} class="rounded-full border border-slate-300 px-4 py-2 text-xs text-slate-600 hover:bg-slate-100">Fechar</button>
 		</div>
 	</div>
 </dialog>
