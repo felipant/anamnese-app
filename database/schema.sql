@@ -1,14 +1,15 @@
 PRAGMA foreign_keys = ON;
 
-DROP TABLE IF EXISTS medicamentos;
-
+--DROP TABLE IF EXISTS medicamentos;
+--DROP TABLE IF EXISTS exames;
 CREATE TABLE IF NOT EXISTS exames (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	material TEXT NOT NULL,
 	nome TEXT NOT NULL,
 	pacote TEXT,
 	unidade_medida TEXT,
-	valores_referencia TEXT
+	valores_referencia TEXT,
+	significado TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cid_capitulos (
@@ -63,3 +64,19 @@ CREATE INDEX IF NOT EXISTS idx_cid_doencas_subcat ON cid_doencas (subcat);
 CREATE INDEX IF NOT EXISTS idx_cid_doencas_subcat_desc ON cid_doencas (subcat_desc);
 CREATE INDEX IF NOT EXISTS idx_medicamentos_principio_ativo ON medicamentos (principio_ativo);
 CREATE INDEX IF NOT EXISTS idx_procedimentos_descricao ON procedimentos (descricao);
+
+CREATE TABLE IF NOT EXISTS areas_clinicas (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	nome TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS calculadoras_risco (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	area_id INTEGER NOT NULL,
+	nome TEXT NOT NULL,
+	descricao TEXT,
+	link TEXT NOT NULL,
+	FOREIGN KEY (area_id) REFERENCES areas_clinicas (id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_calculadoras_risco_area_id ON calculadoras_risco (area_id);

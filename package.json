@@ -28,6 +28,7 @@
 		"wrangler": "^4.86.0"
 	},
 	"dependencies": {
-		"better-sqlite3": "^12.9.0"
+		"better-sqlite3": "^12.9.0",
+		"html2pdf.js": "^0.10.1"
 	}
 }

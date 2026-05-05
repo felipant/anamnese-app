@@ -1,7 +1,7 @@
 <script>
 	import { onMount } from 'svelte';
 
-	/** @typedef {{ id: number | null; material: string; nome: string; pacote: string; unidade_medida: string; valores_referencia: string; }} Exame */
+	/** @typedef {{ id: number | null; material: string; nome: string; pacote: string; unidade_medida: string; valores_referencia: string; significado: string; }} Exame */
 
 	/** @type {Exame[]} */
 	let exames = [];
@@ -21,7 +21,8 @@
 		nome: '',
 		pacote: '',
 		unidade_medida: '',
-		valores_referencia: ''
+		valores_referencia: '',
+		significado: ''
 	};
 
 	/** @type {Exame} */
@@ -167,14 +168,15 @@
 							<th class="px-3 py-2">Pacote</th>
 							<th class="px-3 py-2">Unidade</th>
 							<th class="px-3 py-2">Valores de Referência</th>
+							<th class="px-3 py-2">Significado</th>
 							<th class="px-3 py-2 text-right">Ações</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#if loading}
-							<tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">Carregando...</td></tr>
+							<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Carregando...</td></tr>
 						{:else if exames.length === 0}
-							<tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">Sem exames cadastrados.</td></tr>
+							<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Sem exames cadastrados.</td></tr>
 						{:else}
 							{#each exames as exame}
 								<tr
@@ -187,6 +189,7 @@
 									<td class="px-3 py-2">{exame.pacote || '-'}</td>
 									<td class="px-3 py-2">{exame.unidade_medida}</td>
 									<td class="px-3 py-2">{exame.valores_referencia}</td>
+									<td class="px-3 py-2 max-w-xs truncate" title={exame.significado}>{exame.significado || '-'}</td>
 									<td class="px-3 py-2 text-right">
 										<button
 											on:click|stopPropagation={() => excluirExame(exame.id)}
@@ -265,6 +268,16 @@
 				<textarea
 					rows="3"
 					bind:value={form.valores_referencia}
+					class="w-full rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+				></textarea>
+			</label>
+
+			<label class="block">
+				<span class="mb-1 block text-slate-700">Significado (opcional)</span>
+				<textarea
+					rows="3"
+					bind:value={form.significado}
+					placeholder="Descreva o significado clínico deste exame..."
 					class="w-full rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
 				></textarea>
 			</label>

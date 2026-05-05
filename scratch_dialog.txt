@@ -1,0 +1,134 @@
+<!-- Modal de Escores de Risco -->
+<dialog bind:this={calculadorasDialogRef} class="w-full max-w-4xl rounded-3xl p-0 backdrop:bg-slate-950/30">
+	<div class="flex h-full max-h-[85vh] flex-col bg-white">
+		<div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+			<h3 class="text-lg font-semibold text-slate-900">Escores de Risco e Calculadoras</h3>
+			<button type="button" on:click={closeCalculadorasModal} class="text-slate-400 hover:text-slate-600">
+				✕
+			</button>
+		</div>
+
+		<!-- Abas -->
+		<div class="flex gap-4 border-b border-slate-200 px-6">
+			<button
+				type="button"
+				class="border-b-2 px-1 py-3 text-sm font-medium {calculadorasTab === 'lista' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}"
+				on:click={() => (calculadorasTab = 'lista')}
+			>
+				Calculadoras Salvas
+			</button>
+			<button
+				type="button"
+				class="border-b-2 px-1 py-3 text-sm font-medium {calculadorasTab === 'gerenciar' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}"
+				on:click={() => (calculadorasTab = 'gerenciar')}
+			>
+				Gerenciar Calculadoras
+			</button>
+		</div>
+
+		<div class="flex-1 overflow-y-auto p-6">
+			{#if calculadorasLoading}
+				<div class="py-8 text-center text-slate-500">Carregando...</div>
+			{:else if calculadorasTab === 'lista'}
+				{#if areasClinicas.length === 0}
+					<div class="py-8 text-center text-slate-500">
+						Nenhuma área clínica ou calculadora salva.
+						<br/>Vá para a aba "Gerenciar Calculadoras" para adicionar.
+					</div>
+				{:else}
+					<div class="flex flex-col gap-8">
+						{#each Object.entries(calculadorasPorArea) as [areaNome, calcs]}
+							<div>
+								<h4 class="mb-4 text-base font-semibold text-slate-800 border-b border-slate-100 pb-2">{areaNome}</h4>
+								{#if calcs.length === 0}
+									<p class="text-sm text-slate-500 italic">Nenhuma calculadora nesta área.</p>
+								{:else}
+									<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+										{#each calcs as calc}
+											<div class="flex flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4 transition-colors hover:border-slate-300">
+												<h5 class="font-semibold text-slate-900">{calc.nome}</h5>
+												{#if calc.descricao}
+													<p class="mt-1 text-xs text-slate-600 line-clamp-2">{calc.descricao}</p>
+												{/if}
+												<div class="mt-auto pt-3">
+													<a href={calc.link} target="_blank" rel="noopener noreferrer" class="inline-flex items-center text-xs font-medium text-blue-600 hover:text-blue-800">
+														Abrir Calculadora ↗
+													</a>
+												</div>
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+			{:else}
+				<div class="grid gap-8 lg:grid-cols-2">
+					<!-- Nova Área -->
+					<div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+						<h4 class="mb-4 font-semibold text-slate-900">Nova Área Clínica</h4>
+						<div class="flex flex-col gap-3">
+							<input
+								type="text"
+								bind:value={novaAreaNome}
+								placeholder="Ex: Cardiologia, Nefrologia"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<button
+								type="button"
+								on:click={salvarNovaArea}
+								disabled={!novaAreaNome.trim()}
+								class="w-full rounded-xl bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+							>
+								Salvar Área
+							</button>
+						</div>
+					</div>
+
+					<!-- Nova Calculadora -->
+					<div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+						<h4 class="mb-4 font-semibold text-slate-900">Nova Calculadora</h4>
+						<div class="flex flex-col gap-3">
+							<select
+								bind:value={novaCalc.area_id}
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							>
+								<option value="">Selecione a Área...</option>
+								{#each areasClinicas as area}
+									<option value={area.id}>{area.nome}</option>
+								{/each}
+							</select>
+							<input
+								type="text"
+								bind:value={novaCalc.nome}
+								placeholder="Nome (ex: ASCVD Risk)"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<input
+								type="text"
+								bind:value={novaCalc.descricao}
+								placeholder="Descrição (opcional)"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<input
+								type="url"
+								bind:value={novaCalc.link}
+								placeholder="URL (https://...)"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<button
+								type="button"
+								on:click={salvarNovaCalculadora}
+								disabled={!novaCalc.area_id || !novaCalc.nome.trim() || !novaCalc.link.trim()}
+								class="mt-2 w-full rounded-xl bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+							>
+								Salvar Calculadora
+							</button>
+						</div>
+					</div>
+				</div>
+			{/if}
+		</div>
+	</div>
+</dialog>

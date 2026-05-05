@@ -1,7 +1,15 @@
 <script>
 	import { onDestroy, onMount } from 'svelte';
-	import { consultaDraft } from '$lib/consultaStore';
+	import {
+		consultaDraft,
+		clearConsultaDraft,
+		DISEASES_STORAGE_KEY,
+		MEDICATIONS_STORAGE_KEY,
+		LABORATORIO_STORAGE_KEY,
+		IMAGEM_STORAGE_KEY
+	} from '$lib/consultaStore';
 	import { loadFromLocalStorage, saveToLocalStorage } from '$lib/useLocalStorage.js';
+	import html2pdf from 'html2pdf.js';
 
 	/** @typedef {{ id: number; subcat: string; subcat_desc: string; grupo: string; cat: string; cat_desc: string; cap: string; cap_desc: string; }} CidSearchItem */
 	/** @typedef {{ sourceId: number | null; principio_ativo: string; concentracao: string; classe: string; forma_farmaceutica: string; fornecimento_sus: string; observacoes: string; frequenciaTipo: string; diario: { manha: string; tarde: string; noite: string; }; semanal: string; intervalo: string; especial: string; doseQual: string; }} MedicationForm */
@@ -70,7 +78,12 @@
 		ocupacional: 'História Ocupacional',
 		psicossocial: 'História Psicossocial',
 		habitos: 'Hábitos de Vida',
-		recordatorio_alimentar: 'Recordatório Alimentar'
+		recordatorio_alimentar: 'Recordatório Alimentar',
+		// Exame Ginecológico
+		mamas_palpacao: 'Palpação das Mamas',
+		genitalia_externa: 'Exame da Genitália Externa',
+		genitalia_interna: 'Exame da Genitália Interna',
+		genitalia_toque: 'Toque Vaginal'
 	};
 	/** @type {Record<string, string>} */
 	const defaultGuides = {
@@ -83,7 +96,16 @@
 			'Explore contexto familiar, suporte social, moradia, renda, estressores, espiritualidade e segurança.',
 		habitos: 'Documente sono, atividade física, alimentação, etilismo, tabagismo, drogas e sexualidade quando pertinente.',
 		recordatorio_alimentar:
-			'Registre refeições em ordem cronológica, incluindo horários, quantidades aproximadas, bebidas e beliscos fora das refeições.'
+			'Registre refeições em ordem cronológica, incluindo horários, quantidades aproximadas, bebidas e beliscos fora das refeições.',
+		// Exame Ginecológico - Templates
+		mamas_palpacao:
+			'Mamas simétricas, sem nódulos palpáveis, sem dor à palpação. Superfície lisa, consistência elástica homogênea. Ausência de adenomegalias axilares.',
+		genitalia_externa:
+			'Vulva com aspecto normal, mucosa rosada e hidratada. Bigornos e pequenos lábios sem alterações. Ausência de lesões, eritema ou descamação.',
+		genitalia_interna:
+			'Colo uterino com aspecto normal, mucosa rosada, orifício cervical permeável. Ausência de sangramento ativo, secreção anormal ou lesões.',
+		genitalia_toque:
+			'Útero em posição anterior/anteversoflexo, consistência elástica, volume normal, mobilidade preservada. Anexos livres, sem massas palpáveis. Ausência de dor à mobilização.'
 	};
 
 	let aviso = '';
@@ -159,6 +181,7 @@
 			internacoes: '',
 			traumatismos: ''
 		},
+		historiaFamiliar: '',
 		ocupacional: '',
 		psicossocial: '',
 		habitos: '',
@@ -184,8 +207,8 @@
 		}
 	};
 
-	/** @typedef {{ id: string; nome: string; pacote?: string; valoresReferencia?: string; unidade?: string; resultado?: string; selecionado?: boolean; }} LaboratorioItem */
-	/** @typedef {{ id: string; nome: string; motivo?: string; resultado?: string; medicoExecutor?: string; }} ImagemItem */
+	/** @typedef {{ id: string; nome: string; pacote?: string; valoresReferencia?: string; unidade?: string; resultado?: string; selecionado?: boolean; significado?: string; dataExecucao?: string; }} LaboratorioItem */
+	/** @typedef {{ id: string; nome: string; motivo?: string; resultado?: string; medicoExecutor?: string; dataRealizacao?: string; }} ImagemItem */
 
 	// Variáveis para Exames Laboratoriais
 	/** @type {LaboratorioItem[]} */
@@ -194,13 +217,21 @@
 	let labDialogRef;
 	let labSearch = '';
 	let labLoading = false;
-	/** @type {Array<{ id: number; nome: string; pacote: string | null; valores_referencia: string | null; unidade_medida: string | null; }>} */
+	/** @type {Array<{ id: number; nome: string; pacote: string | null; valores_referencia: string | null; unidade_medida: string | null; significado: string | null; }>} */
 	let labSearchResults = [];
 	/** @type {ReturnType<typeof setTimeout> | undefined} */
 	let labSearchTimer;
 	let labModo = 'pacote'; // 'pacote' ou 'manual'
 	let labPacoteSelecionado = '';
+	let labDataExecucao = ''; // Data de execução obrigatória ao adicionar pacote
 	let labExameManual = { nome: '', valoresReferencia: '', unidade: '' };
+
+	// Variáveis para seleção de pacotes e edição de exames
+	/** @type {string[]} */
+	let labPacotesDisponiveis = [];
+	let labPacotesLoading = false;
+	/** @type {LaboratorioItem[]} */
+	let labExamesEmEdicao = []; // Exames em edição no modal
 
 	// Variáveis para Exames de Imagem
 	/** @type {ImagemItem[]} */
@@ -209,11 +240,27 @@
 	let imagemDialogRef;
 	let imagemSearch = '';
 	let imagemLoading = false;
+
+	/** @type {HTMLDialogElement | null} */
+	let resetDialogRef;
 	/** @type {Array<{ id: number; descricao: string; }>} */
 	let imagemSearchResults = [];
 	/** @type {ReturnType<typeof setTimeout> | undefined} */
 	let imagemSearchTimer;
 	let imagemExameManual = '';
+	let imagemDataRealizacao = ''; // Data de realização do exame de imagem
+
+	// Variáveis para Escores de Risco
+	/** @type {HTMLDialogElement | null} */
+	let calculadorasDialogRef;
+	let calculadorasLoading = false;
+	/** @type {Array<{id: number, nome: string}>} */
+	let areasClinicas = [];
+	/** @type {Array<{id: number, area_id: number, nome: string, descricao: string, link: string}>} */
+	let calculadorasRisco = [];
+	let calculadorasTab = 'lista'; // 'lista' ou 'gerenciar'
+	let novaAreaNome = '';
+	let novaCalc = { area_id: '', nome: '', descricao: '', link: '' };
 
 	let objective = {
 		// Sinais Vitais
@@ -241,7 +288,34 @@
 			neurologico: '',
 			respiratorioInferior: '',
 			respiratorioSuperior: '',
-			ginecologico: ''
+			ginecologico: {
+				// Exame das Mamas
+				mamas: {
+					inspecaoEstatica: {
+						posicao: '', // topicas/ptoticas
+						simetria: '', // simetricas/assimetricas
+						volume: '', // eutroficas/hipotroficas/hipertroficas
+						mamilos: '', // proeminentes/planos/invertidos
+						ausenciaAbaulamentosRetracoes: false,
+						observacoes: ''
+					},
+					inspecaoDinamica: {
+						ausenciaAbaulamentosRetracoes: false,
+						observacoes: ''
+					},
+					palpacao: '',
+					expressao: {
+						resultado: '', // positiva/negativa
+						observacoes: ''
+					}
+				},
+				// Exame da Genitália
+				genitalia: {
+					externa: '',
+					interna: '',
+					toqueVaginal: ''
+				}
+			}
 		}
 	};
 
@@ -274,24 +348,65 @@
 	/** @type {Record<string, FamilyHistoryEntry>} */
 	let familyHistory = createEmptyFamilyHistory();
 
-	// Chaves para persistência independente de doenças e medicamentos
-	const DISEASES_STORAGE_KEY = 'consulta-doencas-v1';
-	const MEDICATIONS_STORAGE_KEY = 'consulta-medicamentos-v1';
-
 	$: diseaseGroups = groupBy(diseases, (item) => item.cap_desc || 'Sem capítulo definido');
 	$: medicationGroups = groupBy(medications, (item) => item.classe || 'Classe não informada');
 	$: laboratorioAgrupado = groupBy(laboratorioSelecionados, (item) => item.pacote || 'Exames Avulsos');
 	$: laboratorioSelecionadosTodos = laboratorioSelecionados.length > 0 && laboratorioSelecionados.every((item) => item.selecionado);
-	$: if (draftHydrated) {
+	$: calculadorasPorArea = groupBy(calculadorasRisco, c => areasClinicas.find(a => a.id === c.area_id)?.nome || 'Outros');
+
+	// Derived state for pivot table grouped by pacote (group by pacote then exam name, pivot by date)
+	$: laboratorioPivotPorPacote = (() => {
+		const pacoteMap = new Map();
+
+		for (const item of laboratorioSelecionados) {
+			const pacoteName = item.pacote || 'Exames Avulsos';
+			const date = item.dataExecucao || 'Sem data';
+
+			if (!pacoteMap.has(pacoteName)) {
+				pacoteMap.set(pacoteName, {
+					pacote: pacoteName,
+					datas: new Set(),
+					examMap: new Map()
+				});
+			}
+
+			const pacoteData = pacoteMap.get(pacoteName);
+			pacoteData.datas.add(date);
+
+			if (!pacoteData.examMap.has(item.nome)) {
+				pacoteData.examMap.set(item.nome, {
+					nome: item.nome,
+					valoresReferencia: item.valoresReferencia || '',
+					unidade: item.unidade || '',
+					significado: item.significado || '',
+					resultadosPorData: {}
+				});
+			}
+			pacoteData.examMap.get(item.nome).resultadosPorData[date] = item.resultado || '';
+		}
+
+		return Array.from(pacoteMap.values()).map(p => ({
+			pacote: p.pacote,
+			datas: Array.from(p.datas).sort(),
+			exames: Array.from(p.examMap.values())
+		}));
+	})();
+	$: if (draftHydrated && subjective && objective && assessment && plan && familyHistory && diseases && medications) {
 		consultaDraft.set(buildDraftSnapshot());
 	}
 
-	// Persistência explícita de doenças e medicamentos com reatividade garantida
+	// Persistência explícita de doenças, medicamentos e exames com reatividade garantida
 	$: if (draftHydrated && diseases) {
 		saveToLocalStorage(DISEASES_STORAGE_KEY, diseases);
 	}
 	$: if (draftHydrated && medications) {
 		saveToLocalStorage(MEDICATIONS_STORAGE_KEY, medications);
+	}
+	$: if (draftHydrated && laboratorioSelecionados) {
+		saveToLocalStorage(LABORATORIO_STORAGE_KEY, laboratorioSelecionados);
+	}
+	$: if (draftHydrated && imagemSelecionados) {
+		saveToLocalStorage(IMAGEM_STORAGE_KEY, imagemSelecionados);
 	}
 
 	/**
@@ -451,6 +566,60 @@
 			closeGuideEditor();
 		} catch (e) {
 			erro = e instanceof Error ? e.message : 'Erro inesperado ao salvar guia.';
+		} finally {
+			savingGuide = false;
+		}
+	}
+
+	/**
+	 * Carrega template de guia para campo do exame ginecológico
+	 * @param {string} guideKey - Chave do template (ex: 'mamas_palpacao')
+	 * @param {string} currentValue - Valor atual do campo
+	 * @returns {string} - Template ou valor atual se não houver template
+	 */
+	function loadTemplate(guideKey, currentValue) {
+		// Se já existe valor preenchido, mantém
+		if (currentValue && currentValue.trim()) return currentValue;
+		// Caso contrário, carrega o template das guias
+		return guides[guideKey] || '';
+	}
+
+	/**
+	 * Salva o conteúdo atual como novo template no banco
+	 * @param {string} guideKey - Chave do template
+	 * @param {string} content - Conteúdo a salvar
+	 */
+	async function salvarTemplate(guideKey, content) {
+		if (!content || !content.trim()) {
+			erro = 'O template não pode ficar vazio.';
+			return;
+		}
+
+		savingGuide = true;
+		erro = '';
+		try {
+			const response = await fetch('/api/guias-consulta', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					secao: guideKey,
+					conteudo: content.trim()
+				})
+			});
+			const data = await response.json();
+			if (!response.ok) {
+				throw new Error(data?.error || 'Falha ao salvar template.');
+			}
+
+			// Atualiza localmente
+			guides = {
+				...guides,
+				[guideKey]: content.trim()
+			};
+			aviso = `Template "${guideSectionLabels[guideKey] || guideKey}" salvo com sucesso!`;
+			setTimeout(() => (aviso = ''), 3000);
+		} catch (e) {
+			erro = e instanceof Error ? e.message : 'Erro ao salvar template.';
 		} finally {
 			savingGuide = false;
 		}
@@ -1095,18 +1264,91 @@
 			if (ef.neurologico) lines.push(`- **Neurológico:** ${ef.neurologico}`);
 			if (ef.respiratorioInferior) lines.push(`- **Respiratório Inferior:** ${ef.respiratorioInferior}`);
 			if (ef.respiratorioSuperior) lines.push(`- **Respiratório Superior (ORL):** ${ef.respiratorioSuperior}`);
-			if (ef.ginecologico) lines.push(`- **Exame Ginecológico:** ${ef.ginecologico}`);
+				// Exame Ginecológico detalhado
+			if (subjective.identificacao.sexo === 'Feminino') {
+				const gineco = ef.ginecologico;
+				const mamas = gineco?.mamas;
+				const genitalia = gineco?.genitalia;
+				
+				const temExameGinecologico = mamas?.palpacao || mamas?.expressao?.resultado || 
+					genitalia?.externa || genitalia?.interna || genitalia?.toqueVaginal ||
+					mamas?.inspecaoEstatica?.posicao || mamas?.inspecaoEstatica?.simetria;
+				
+				if (temExameGinecologico) {
+					lines.push('- **Exame Ginecológico:**');
+					
+					// Exame das Mamas
+					if (mamas) {
+						const ie = mamas.inspecaoEstatica;
+						const id = mamas.inspecaoDinamica;
+						const temMamas = ie?.posicao || ie?.simetria || ie?.volume || ie?.mamilos || 
+							ie?.observacoes || id?.observacoes || mamas?.palpacao || mamas?.expressao?.resultado;
+						
+						if (temMamas) {
+							lines.push('  - **Exame das Mamas:**');
+							
+							// Inspeção Estática
+							const ieCampos = [];
+							if (ie?.posicao) ieCampos.push(`Posição: ${ie.posicao}`);
+							if (ie?.simetria) ieCampos.push(`Simetria: ${ie.simetria}`);
+							if (ie?.volume) ieCampos.push(`Volume: ${ie.volume}`);
+							if (ie?.mamilos) ieCampos.push(`Mamilos: ${ie.mamilos}`);
+							if (ie?.ausenciaAbaulamentosRetracoes) ieCampos.push('Ausência de abaulamentos/retrações');
+							if (ie?.observacoes) ieCampos.push(`Obs: ${ie.observacoes}`);
+							if (ieCampos.length > 0) {
+								lines.push(`    - Inspeção Estática: ${ieCampos.join(', ')}`);
+							}
+							
+							// Inspeção Dinâmica
+							const idCampos = [];
+							if (id?.ausenciaAbaulamentosRetracoes) idCampos.push('Ausência de abaulamentos/retrações');
+							if (id?.observacoes) idCampos.push(`Obs: ${id.observacoes}`);
+							if (idCampos.length > 0) {
+								lines.push(`    - Inspeção Dinâmica: ${idCampos.join(', ')}`);
+							}
+							
+							// Palpação
+							if (mamas?.palpacao?.trim()) {
+								lines.push(`    - Palpação: ${mamas.palpacao}`);
+							}
+							
+							// Expressão
+							if (mamas?.expressao?.resultado) {
+								const expObs = mamas.expressao.observacoes ? ` (${mamas.expressao.observacoes})` : '';
+								lines.push(`    - Expressão: ${mamas.expressao.resultado}${expObs}`);
+							}
+						}
+						
+						// Exame da Genitália
+						const temGenitalia = genitalia?.externa || genitalia?.interna || genitalia?.toqueVaginal;
+						if (temGenitalia) {
+							lines.push('  - **Exame da Genitália:**');
+							if (genitalia?.externa?.trim()) lines.push(`    - Externa: ${genitalia.externa}`);
+							if (genitalia?.interna?.trim()) lines.push(`    - Interna: ${genitalia.interna}`);
+							if (genitalia?.toqueVaginal?.trim()) lines.push(`    - Toque Vaginal: ${genitalia.toqueVaginal}`);
+						}
+					}
+					lines.push('');
+				}
+			}
 			lines.push('');
 		}
 
 		// Exames Laboratoriais
-		if (laboratorioSelecionados.length > 0) {
+		if (laboratorioPivotPorPacote.length > 0) {
 			lines.push('**EXAMES LABORATORIAIS**');
-			for (const [pacote, itens] of Object.entries(laboratorioAgrupado)) {
-				lines.push(`*${pacote}:*`);
-				for (const item of itens) {
-					const resultado = item.resultado ? ` = ${item.resultado}` : '';
-					lines.push(`- ${item.nome}${resultado}`);
+			for (const pacoteData of laboratorioPivotPorPacote) {
+				lines.push(`\n*${pacoteData.pacote}:*`);
+				const header = ['Exame', 'Val. Ref.', 'Unid.', ...pacoteData.datas.map(d => d === 'Sem data' ? 'Sem data' : new Date(d).toLocaleDateString('pt-BR'))].join(' | ');
+				lines.push(header);
+				for (const exame of pacoteData.exames) {
+					const row = [
+						exame.nome,
+						exame.valoresReferencia || '-',
+						exame.unidade || '-',
+						...pacoteData.datas.map(d => exame.resultadosPorData[d] || '-')
+					].join(' | ');
+					lines.push(row);
 				}
 			}
 			lines.push('');
@@ -1136,20 +1378,739 @@
 	}
 
 	// ==========================================
+	// EXPORTAÇÃO PARA PDF
+	// ==========================================
+
+	/**
+	 * Gera e exporta a consulta completa em formato PDF
+	 */
+	async function exportarPDF() {
+		try {
+			// Monta o conteúdo HTML para o PDF
+			const htmlContent = gerarHTMLPDF();
+
+			// Configurações do PDF
+			const opt = {
+				margin: [15, 15, 15, 15],
+				filename: `Consulta_Paciente_${new Date().toISOString().split('T')[0]}.pdf`,
+				image: { type: 'jpeg', quality: 0.98 },
+				html2canvas: { scale: 2, useCORS: true, logging: true },
+				jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+			};
+
+			// Container temporário (off-screen) para evitar erro de elementos colapsados
+			const container = document.createElement('div');
+			container.style.position = 'absolute';
+			container.style.top = '-99999px';
+			container.style.left = '-99999px';
+			container.style.width = '800px';
+			container.style.backgroundColor = '#ffffff';
+			container.innerHTML = htmlContent;
+			document.body.appendChild(container);
+
+			// Gera o PDF
+			await html2pdf().set(opt).from(container).save();
+			
+			// Limpa o container
+			document.body.removeChild(container);
+
+			aviso = 'PDF gerado e baixado com sucesso!';
+			setTimeout(() => (aviso = ''), 3000);
+		} catch (err) {
+			erro = 'Erro ao gerar PDF. Tente novamente.';
+			console.error('Erro ao gerar PDF:', err);
+		}
+	}
+
+	/**
+	 * Gera o conteúdo HTML formatado para o PDF
+	 */
+	function gerarHTMLPDF() {
+		const sections = [];
+
+		// Cabeçalho
+		sections.push(`
+			<div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px;">
+				<h1 style="font-size: 18px; font-weight: bold; margin: 0; color: #000;">PRONTUÁRIO MÉDICO</h1>
+				<p style="font-size: 12px; margin: 5px 0 0 0; color: #333;">${new Date().toLocaleDateString('pt-BR')}</p>
+			</div>
+		`);
+
+		// === SUBJETIVO (S) ===
+		const subjetivoHTML = gerarSubjetivoHTML();
+		if (subjetivoHTML) {
+			sections.push(`
+				<div style="margin-bottom: 20px;">
+					<h2 style="font-size: 16px; font-weight: bold; color: #000; border-bottom: 1px solid #666; padding-bottom: 5px; margin-bottom: 10px;">S | SUBJETIVO</h2>
+					${subjetivoHTML}
+				</div>
+			`);
+		}
+
+		// === OBJETIVO (O) ===
+		const objetivoHTML = gerarObjetivoHTML();
+		if (objetivoHTML) {
+			sections.push(`
+				<div style="margin-bottom: 20px;">
+					<h2 style="font-size: 16px; font-weight: bold; color: #000; border-bottom: 1px solid #666; padding-bottom: 5px; margin-bottom: 10px;">O | OBJETIVO</h2>
+					${objetivoHTML}
+				</div>
+			`);
+		}
+
+		// === AVALIAÇÃO (A) ===
+		const temAvaliacao = assessment?.hipoteses?.trim() || assessment?.riscos?.trim() || assessment?.observacoes?.trim();
+		if (temAvaliacao) {
+			const avalParts = [];
+			if (assessment?.hipoteses?.trim()) avalParts.push(`<p style="font-size: 11px; margin: 0 0 5px 0;"><b>Hipóteses:</b> ${escapeHtml(assessment.hipoteses)}</p>`);
+			if (assessment?.riscos?.trim()) avalParts.push(`<p style="font-size: 11px; margin: 0 0 5px 0;"><b>Riscos:</b> ${escapeHtml(assessment.riscos)}</p>`);
+			if (assessment?.observacoes?.trim()) avalParts.push(`<p style="font-size: 11px; margin: 0 0 5px 0;"><b>Observações:</b> ${escapeHtml(assessment.observacoes)}</p>`);
+			sections.push(`
+				<div style="margin-bottom: 20px;">
+					<h2 style="font-size: 16px; font-weight: bold; color: #000; border-bottom: 1px solid #666; padding-bottom: 5px; margin-bottom: 10px;">A | AVALIAÇÃO</h2>
+					${avalParts.join('')}
+				</div>
+			`);
+		}
+
+		// === PLANO (P) ===
+		const temPlano = plan?.condutas?.trim() || plan?.prescricao?.trim() || plan?.seguimento?.trim();
+		if (temPlano) {
+			const planoParts = [];
+			if (plan?.condutas?.trim()) planoParts.push(`<p style="font-size: 11px; margin: 0 0 5px 0;"><b>Condutas:</b> ${escapeHtml(plan.condutas)}</p>`);
+			if (plan?.prescricao?.trim()) planoParts.push(`<p style="font-size: 11px; margin: 0 0 5px 0;"><b>Prescrição:</b> ${escapeHtml(plan.prescricao)}</p>`);
+			if (plan?.seguimento?.trim()) planoParts.push(`<p style="font-size: 11px; margin: 0 0 5px 0;"><b>Seguimento:</b> ${escapeHtml(plan.seguimento)}</p>`);
+			sections.push(`
+				<div style="margin-bottom: 20px;">
+					<h2 style="font-size: 16px; font-weight: bold; color: #000; border-bottom: 1px solid #666; padding-bottom: 5px; margin-bottom: 10px;">P | PLANO</h2>
+					${planoParts.join('')}
+				</div>
+			`);
+		}
+
+		// Rodapé
+		sections.push(`
+			<div style="text-align: center; margin-top: 30px; padding-top: 10px; border-top: 1px solid #ccc; font-size: 10px; color: #666;">
+				Documento gerado eletronicamente via Sistema de Anamnese
+			</div>
+		`);
+
+		return `
+			<!DOCTYPE html>
+			<html>
+			<head>
+				<meta charset="UTF-8">
+				<style>
+					body { font-family: Arial, Helvetica, sans-serif; line-height: 1.4; color: #000; }
+					p { margin: 0 0 8px 0; }
+				</style>
+			</head>
+			<body>
+				${sections.join('')}
+			</body>
+			</html>
+		`;
+	}
+
+	/**
+	 * Gera HTML do Subjetivo para PDF
+	 */
+	function gerarSubjetivoHTML() {
+		const parts = [];
+
+		// Identificação completa
+		const id = subjective.identificacao;
+		const temIdentificacao = id.idade || id.ocupacao || id.naturalidade || id.acompanhante ||
+			id.sexo || id.genero || id.raca || id.estadoCivil || id.escolaridade || id.religiao;
+		if (temIdentificacao) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Identificação</h3>');
+			const campos = [];
+			if (id.idade) campos.push(`<b>Idade:</b> ${escapeHtml(id.idade)}`);
+			if (id.ocupacao) campos.push(`<b>Ocupação:</b> ${escapeHtml(id.ocupacao)}`);
+			if (id.naturalidade) campos.push(`<b>Naturalidade:</b> ${escapeHtml(id.naturalidade)}`);
+			if (id.acompanhante) campos.push(`<b>Acompanhante:</b> ${escapeHtml(id.acompanhante)}`);
+			if (id.sexo) campos.push(`<b>Sexo:</b> ${escapeHtml(id.sexo)}`);
+			if (id.genero) campos.push(`<b>Gênero:</b> ${escapeHtml(id.genero === 'Outros' ? id.generoOutro || id.genero : id.genero)}`);
+			if (id.raca) campos.push(`<b>Raça:</b> ${escapeHtml(id.raca === 'Outros' ? id.racaOutro || id.raca : id.raca)}`);
+			if (id.estadoCivil) campos.push(`<b>Estado Civil:</b> ${escapeHtml(id.estadoCivil === 'Outros' ? id.estadoCivilOutro || id.estadoCivil : id.estadoCivil)}`);
+			if (id.escolaridade) campos.push(`<b>Escolaridade:</b> ${escapeHtml(id.escolaridade === 'Outros' ? id.escolaridadeOutro || id.escolaridade : id.escolaridade)}`);
+			if (id.religiao) campos.push(`<b>Religião:</b> ${escapeHtml(id.religiao === 'Outros' ? id.religiaoOutro || id.religiao : id.religiao)}`);
+			parts.push(`<p style="font-size: 11px; margin: 0;">${campos.join(' | ')}</p>`);
+			parts.push('</div>');
+		}
+
+		// Queixa Principal
+		if (subjective.queixaPrincipal?.trim()) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Queixa Principal</h3>');
+			parts.push(`<p style="font-size: 11px; margin: 0; white-space: pre-wrap;">${escapeHtml(subjective.queixaPrincipal)}</p>`);
+			parts.push('</div>');
+		}
+
+		// HMA
+		if (subjective.hma?.trim()) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">HMA</h3>');
+			parts.push(`<p style="font-size: 11px; margin: 0; white-space: pre-wrap;">${escapeHtml(subjective.hma)}</p>`);
+			parts.push('</div>');
+		}
+
+		// Revisão de Sistemas
+		if (subjective.revisaoSistemas?.trim()) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Revisão de Sistemas</h3>');
+			parts.push(`<p style="font-size: 11px; margin: 0; white-space: pre-wrap;">${escapeHtml(subjective.revisaoSistemas)}</p>`);
+			parts.push('</div>');
+		}
+
+		// História Familiar
+		const familyEntries = Object.entries(familyHistory).filter(([_, entry]) => entry.checked);
+		if (familyEntries.length > 0 || subjective.historiaFamiliar?.trim()) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">História Familiar</h3>');
+			if (familyEntries.length > 0) {
+				parts.push('<ul style="margin: 0 0 5px 0; padding-left: 20px; font-size: 11px;">');
+				familyEntries.forEach(([key, entry]) => {
+					const label = familyHistoryOptions.find(o => o.id === key)?.label || key;
+					if (entry.parentes && entry.parentes.length > 0) {
+						entry.parentes.forEach(p => {
+							const parentesco = p.parentesco ? ` (${escapeHtml(p.parentesco)}${p.idade ? `, ${p.idade} anos` : ''})` : '';
+							parts.push(`<li>${escapeHtml(label)}${parentesco}${p.detalhes ? `: ${escapeHtml(p.detalhes)}` : ''}</li>`);
+						});
+					} else {
+						parts.push(`<li>${escapeHtml(label)}${entry.detalhes ? `: ${escapeHtml(entry.detalhes)}` : ''}</li>`);
+					}
+				});
+				parts.push('</ul>');
+			}
+			if (subjective.historiaFamiliar?.trim()) {
+				parts.push(`<p style="font-size: 11px; margin: 0; white-space: pre-wrap;"><b>Observações:</b> ${escapeHtml(subjective.historiaFamiliar)}</p>`);
+			}
+			parts.push('</div>');
+		}
+
+		// História Ocupacional
+		if (subjective.ocupacional?.trim()) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">História Ocupacional</h3>');
+			parts.push(`<p style="font-size: 11px; margin: 0; white-space: pre-wrap;">${escapeHtml(subjective.ocupacional)}</p>`);
+			parts.push('</div>');
+		}
+
+		// História Psicossocial
+		if (subjective.psicossocial?.trim()) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">História Psicossocial</h3>');
+			parts.push(`<p style="font-size: 11px; margin: 0; white-space: pre-wrap;">${escapeHtml(subjective.psicossocial)}</p>`);
+			parts.push('</div>');
+		}
+
+		// Hábitos de Vida
+		if (subjective.habitos?.trim()) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Hábitos de Vida</h3>');
+			parts.push(`<p style="font-size: 11px; margin: 0; white-space: pre-wrap;">${escapeHtml(subjective.habitos)}</p>`);
+			parts.push('</div>');
+		}
+
+		// Recordatório Alimentar
+		const ra = subjective.recordatorioAlimentar;
+		const temRecordatorio = ra.cafeManha || ra.lancheManha || ra.almoco || ra.lancheTarde || ra.cafeTarde || ra.lancheAntesJantar || ra.jantar || ra.lancheDepoisJantar;
+		if (temRecordatorio) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Recordatório Alimentar</h3>');
+			parts.push('<ul style="margin: 0; padding-left: 20px; font-size: 11px;">');
+			if (ra.cafeManha) parts.push(`<li><b>Café da Manhã:</b> ${escapeHtml(ra.cafeManha)}</li>`);
+			if (ra.lancheManha) parts.push(`<li><b>Lanche da Manhã:</b> ${escapeHtml(ra.lancheManha)}</li>`);
+			if (ra.almoco) parts.push(`<li><b>Almoço:</b> ${escapeHtml(ra.almoco)}</li>`);
+			if (ra.lancheTarde) parts.push(`<li><b>Lanche da Tarde:</b> ${escapeHtml(ra.lancheTarde)}</li>`);
+			if (ra.cafeTarde) parts.push(`<li><b>Café da Tarde:</b> ${escapeHtml(ra.cafeTarde)}</li>`);
+			if (ra.lancheAntesJantar) parts.push(`<li><b>Lanche antes do Jantar:</b> ${escapeHtml(ra.lancheAntesJantar)}</li>`);
+			if (ra.jantar) parts.push(`<li><b>Jantar:</b> ${escapeHtml(ra.jantar)}</li>`);
+			if (ra.lancheDepoisJantar) parts.push(`<li><b>Lanche após o Jantar:</b> ${escapeHtml(ra.lancheDepoisJantar)}</li>`);
+			parts.push('</ul>');
+			parts.push('</div>');
+		}
+
+		// História Ginecológica
+		const gineco = subjective.ginecologica;
+		const temGineco = gineco.g || gineco.p || gineco.n || gineco.c || gineco.a || gineco.e || gineco.dum || gineco.mac;
+		if (temGineco) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">História Ginecológica (GPNCAE)</h3>');
+			const campos = [];
+			if (gineco.g) campos.push(`<b>G:</b> ${escapeHtml(gineco.g)}`);
+			if (gineco.p) campos.push(`<b>P:</b> ${escapeHtml(gineco.p)}`);
+			if (gineco.n) campos.push(`<b>N:</b> ${escapeHtml(gineco.n)}`);
+			if (gineco.c) campos.push(`<b>C:</b> ${escapeHtml(gineco.c)}`);
+			if (gineco.a) campos.push(`<b>A:</b> ${escapeHtml(gineco.a)}`);
+			if (gineco.e) campos.push(`<b>E:</b> ${escapeHtml(gineco.e)}`);
+			if (gineco.dum) campos.push(`<b>DUM:</b> ${escapeHtml(gineco.dum)}`);
+			if (gineco.mac) campos.push(`<b>MAC:</b> ${escapeHtml(gineco.mac)}`);
+			parts.push(`<p style="font-size: 11px; margin: 0;">${campos.join(' | ')}</p>`);
+			parts.push('</div>');
+		}
+
+		// Doenças (com detalhes completos)
+		if (diseases.length > 0) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Doenças de Base (História Patológica Pregressa)</h3>');
+			parts.push('<ul style="margin: 0; padding-left: 20px; font-size: 11px;">');
+			diseases.forEach(d => {
+				let descricao = escapeHtml(d.subcat_desc);
+				if (d.subcat) descricao += ` <span style="color: #666;">[${escapeHtml(d.subcat)}]</span>`;
+				const detalhes = [];
+				if (d.mesAnoDiagnostico) detalhes.push(`Diagnóstico: ${escapeHtml(d.mesAnoDiagnostico)}`);
+				if (d.historico?.trim()) detalhes.push(`Histórico: ${escapeHtml(d.historico)}`);
+				if (d.queixasAtuais?.trim()) detalhes.push(`Queixas atuais: ${escapeHtml(d.queixasAtuais)}`);
+				if (detalhes.length > 0) {
+					parts.push(`<li>${descricao}<br/><span style="padding-left: 10px; color: #555;">${detalhes.join(' | ')}</span></li>`);
+				} else {
+					parts.push(`<li>${descricao}</li>`);
+				}
+			});
+			parts.push('</ul>');
+			parts.push('</div>');
+		}
+
+		// História Patológica (Alergia, Cirurgias, Internações, Traumatismos)
+		const pat = subjective.patologicos;
+		const temPatologicos = pat.alergia || pat.cirurgias || pat.internacoes || pat.traumatismos;
+		if (temPatologicos) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">História Patológica</h3>');
+			parts.push('<ul style="margin: 0; padding-left: 20px; font-size: 11px;">');
+			if (pat.alergia) parts.push(`<li><b>Alergias:</b> ${escapeHtml(pat.alergia)}</li>`);
+			if (pat.cirurgias) parts.push(`<li><b>Cirurgias prévias:</b> ${escapeHtml(pat.cirurgias)}</li>`);
+			if (pat.internacoes) parts.push(`<li><b>Internações:</b> ${escapeHtml(pat.internacoes)}</li>`);
+			if (pat.traumatismos) parts.push(`<li><b>Traumatismos:</b> ${escapeHtml(pat.traumatismos)}</li>`);
+			parts.push('</ul>');
+			parts.push('</div>');
+		}
+
+		// Medicamentos
+		if (medications.length > 0) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Medicamentos de Uso Contínuo</h3>');
+			parts.push('<ul style="margin: 0; padding-left: 20px; font-size: 11px;">');
+			medications.forEach(m => {
+				const freq = describeFrequencyForPDF(m);
+				parts.push(`<li>${escapeHtml(m.principio_ativo)} ${escapeHtml(m.concentracao)} - ${escapeHtml(freq)}${m.observacoes ? ` (${escapeHtml(m.observacoes)})` : ''}</li>`);
+			});
+			parts.push('</ul>');
+			parts.push('</div>');
+		}
+
+		return parts.join('');
+	}
+
+	/**
+	 * Gera HTML do Objetivo para PDF
+	 */
+	function gerarObjetivoHTML() {
+		const parts = [];
+
+		// Sinais Vitais
+		const sv = objective.sinaisVitais;
+		const temSinaisVitais = sv.pas || sv.pad || sv.temperatura || sv.frequenciaCardiaca || sv.frequenciaRespiratoria || sv.spo2;
+		if (temSinaisVitais) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Sinais Vitais</h3>');
+			const campos = [];
+			if (sv.pas || sv.pad) campos.push(`<b>PA:</b> ${sv.pas || '--'}/${sv.pad || '--'} mmHg`);
+			if (sv.temperatura) campos.push(`<b>Temp:</b> ${sv.temperatura}°C`);
+			if (sv.frequenciaCardiaca) campos.push(`<b>FC:</b> ${sv.frequenciaCardiaca} bpm`);
+			if (sv.frequenciaRespiratoria) campos.push(`<b>FR:</b> ${sv.frequenciaRespiratoria} irpm`);
+			if (sv.spo2) campos.push(`<b>SpO2:</b> ${sv.spo2}%`);
+			parts.push(`<p style="font-size: 11px; margin: 0;">${campos.join(' | ')}</p>`);
+			parts.push('</div>');
+		}
+
+		// Antropometria
+		const ant = objective.antropometria;
+		const temAntropometria = ant.altura || ant.peso || ant.imc;
+		if (temAntropometria) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Antropometria</h3>');
+			const campos = [];
+			if (ant.altura) campos.push(`<b>Altura:</b> ${ant.altura} cm`);
+			if (ant.peso) campos.push(`<b>Peso:</b> ${ant.peso} kg`);
+			if (ant.imc) campos.push(`<b>IMC:</b> ${ant.imc} kg/m²`);
+			parts.push(`<p style="font-size: 11px; margin: 0;">${campos.join(' | ')}</p>`);
+			parts.push('</div>');
+		}
+
+		// Exame Físico Geral
+		const ef = objective.exameFisico;
+		const temExameFisico = ef.geral || ef.aparelhoDigestorio || ef.aparelhoCardiovascular || ef.neurologico || ef.respiratorioInferior || ef.respiratorioSuperior;
+		if (temExameFisico) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Exame Físico</h3>');
+			if (ef.geral) parts.push(`<p style="font-size: 11px; margin: 0 0 3px 0;"><b>Geral:</b> ${escapeHtml(ef.geral)}</p>`);
+			if (ef.aparelhoDigestorio) parts.push(`<p style="font-size: 11px; margin: 0 0 3px 0;"><b>Digestório:</b> ${escapeHtml(ef.aparelhoDigestorio)}</p>`);
+			if (ef.aparelhoCardiovascular) parts.push(`<p style="font-size: 11px; margin: 0 0 3px 0;"><b>Cardiovascular:</b> ${escapeHtml(ef.aparelhoCardiovascular)}</p>`);
+			if (ef.neurologico) parts.push(`<p style="font-size: 11px; margin: 0 0 3px 0;"><b>Neurológico:</b> ${escapeHtml(ef.neurologico)}</p>`);
+			if (ef.respiratorioInferior) parts.push(`<p style="font-size: 11px; margin: 0 0 3px 0;"><b>Respiratório:</b> ${escapeHtml(ef.respiratorioInferior)}</p>`);
+			parts.push('</div>');
+		}
+
+		// Exame Ginecológico Detalhado
+		const gin = objective.exameFisico.ginecologico;
+		const mamas = gin?.mamas;
+		const genitalia = gin?.genitalia;
+		const temGineco = mamas?.inspecaoEstatica?.posicao || mamas?.inspecaoEstatica?.simetria || mamas?.inspecaoEstatica?.volume ||
+			mamas?.inspecaoEstatica?.mamilos || mamas?.inspecaoEstatica?.observacoes ||
+			mamas?.inspecaoDinamica?.observacoes ||
+			mamas?.palpacao || mamas?.expressao?.resultado || mamas?.expressao?.observacoes ||
+			genitalia?.externa || genitalia?.interna || genitalia?.toqueVaginal;
+		if (temGineco) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Exame Ginecológico</h3>');
+
+			// Mamas
+			if (mamas) {
+				parts.push('<h4 style="font-size: 12px; font-weight: bold; color: #444; margin: 5px 0 3px 0;">Mamas</h4>');
+
+				// Inspeção Estática
+				const insE = mamas.inspecaoEstatica;
+				if (insE?.posicao || insE?.simetria || insE?.volume || insE?.mamilos || insE?.observacoes) {
+					parts.push('<p style="font-size: 11px; margin: 0 0 2px 0;"><b>Inspeção Estática:</b></p>');
+					const inspecoes = [];
+					if (insE?.posicao) inspecoes.push(`Posição: ${escapeHtml(insE.posicao)}`);
+					if (insE?.simetria) inspecoes.push(`Simetria: ${escapeHtml(insE.simetria)}`);
+					if (insE?.volume) inspecoes.push(`Volume: ${escapeHtml(insE.volume)}`);
+					if (insE?.mamilos) inspecoes.push(`Mamilos: ${escapeHtml(insE.mamilos)}`);
+					if (insE?.observacoes) inspecoes.push(`Obs: ${escapeHtml(insE.observacoes)}`);
+					parts.push(`<p style="font-size: 10px; margin: 0 0 5px 0; padding-left: 10px;">${inspecoes.join(' | ')}</p>`);
+				}
+
+				// Inspeção Dinâmica
+				const insD = mamas.inspecaoDinamica;
+				if (insD?.observacoes) {
+					parts.push('<p style="font-size: 11px; margin: 0 0 2px 0;"><b>Inspeção Dinâmica:</b></p>');
+					parts.push(`<p style="font-size: 10px; margin: 0 0 5px 0; padding-left: 10px;">${escapeHtml(insD.observacoes)}</p>`);
+				}
+
+				// Palpação
+				if (mamas.palpacao) {
+					parts.push('<p style="font-size: 11px; margin: 0 0 2px 0;"><b>Palpação:</b></p>');
+					parts.push(`<p style="font-size: 10px; margin: 0 0 5px 0; padding-left: 10px;">${escapeHtml(mamas.palpacao)}</p>`);
+				}
+
+				// Expressão
+				const exp = mamas.expressao;
+				if (exp?.resultado || exp?.observacoes) {
+					parts.push('<p style="font-size: 11px; margin: 0 0 2px 0;"><b>Expressão:</b></p>');
+					const expressao = [];
+					if (exp?.resultado) expressao.push(`Resultado: ${escapeHtml(exp.resultado)}`);
+					if (exp?.observacoes) expressao.push(`Obs: ${escapeHtml(exp.observacoes)}`);
+					parts.push(`<p style="font-size: 10px; margin: 0 0 5px 0; padding-left: 10px;">${expressao.join(' | ')}</p>`);
+				}
+			}
+
+			// Genitália
+			if (genitalia) {
+				parts.push('<h4 style="font-size: 12px; font-weight: bold; color: #444; margin: 5px 0 3px 0;">Genitália</h4>');
+
+				if (genitalia.externa) {
+					parts.push('<p style="font-size: 11px; margin: 0 0 2px 0;"><b>Externa:</b></p>');
+					parts.push(`<p style="font-size: 10px; margin: 0 0 5px 0; padding-left: 10px;">${escapeHtml(genitalia.externa)}</p>`);
+				}
+
+				if (genitalia.interna) {
+					parts.push('<p style="font-size: 11px; margin: 0 0 2px 0;"><b>Interna:</b></p>');
+					parts.push(`<p style="font-size: 10px; margin: 0 0 5px 0; padding-left: 10px;">${escapeHtml(genitalia.interna)}</p>`);
+				}
+
+				if (genitalia.toqueVaginal) {
+					parts.push('<p style="font-size: 11px; margin: 0 0 2px 0;"><b>Toque Vaginal:</b></p>');
+					parts.push(`<p style="font-size: 10px; margin: 0 0 5px 0; padding-left: 10px;">${escapeHtml(genitalia.toqueVaginal)}</p>`);
+				}
+			}
+			parts.push('</div>');
+		}
+
+		// Exames Laboratoriais (Pivot por Pacote)
+		if (laboratorioPivotPorPacote.length > 0) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Exames Laboratoriais</h3>');
+
+			for (const pacoteData of laboratorioPivotPorPacote) {
+				parts.push(`<p style="font-size: 11px; font-weight: bold; margin: 8px 0 4px 0;">${escapeHtml(pacoteData.pacote)}</p>`);
+				parts.push('<table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">');
+				
+				const thStyle = 'border: 1px solid #ccc; padding: 4px; text-align: left; background-color: #f0f0f0;';
+				let head = `<thead><tr><th style="${thStyle}">Exame</th><th style="${thStyle}">Val. Ref.</th><th style="${thStyle}">Unidade</th>`;
+				for (const data of pacoteData.datas) {
+					const dataLabel = data === 'Sem data' ? 'Sem data' : new Date(data).toLocaleDateString('pt-BR');
+					head += `<th style="${thStyle} text-align: center;">${dataLabel}</th>`;
+				}
+				head += '</tr></thead>';
+				parts.push(head);
+				
+				parts.push('<tbody>');
+				const tdStyle = 'border: 1px solid #ccc; padding: 4px;';
+				const tdCenterStyle = 'border: 1px solid #ccc; padding: 4px; text-align: center;';
+				for (const exame of pacoteData.exames) {
+					let row = `<tr><td style="${tdStyle}">${escapeHtml(exame.nome)}</td><td style="${tdStyle}">${escapeHtml(exame.valoresReferencia || '-')}</td><td style="${tdStyle}">${escapeHtml(exame.unidade || '-')}</td>`;
+					for (const data of pacoteData.datas) {
+						row += `<td style="${tdCenterStyle}">${escapeHtml(exame.resultadosPorData[data] || '-')}</td>`;
+					}
+					row += '</tr>';
+					parts.push(row);
+				}
+				parts.push('</tbody></table>');
+			}
+			parts.push('</div>');
+		}
+
+		// Exames de Imagem Detalhados
+		if (imagemSelecionados.length > 0) {
+			parts.push('<div style="margin-bottom: 10px;">');
+			parts.push('<h3 style="font-size: 13px; font-weight: bold; color: #333; margin: 0 0 5px 0;">Exames de Imagem e Funcionais</h3>');
+			parts.push('<ul style="margin: 0; padding-left: 20px; font-size: 11px;">');
+			imagemSelecionados.forEach(ex => {
+				const data = ex.dataRealizacao ? ` <span style="color: #666;">[${new Date(ex.dataRealizacao).toLocaleDateString('pt-BR')}]</span>` : '';
+				const motivo = ex.motivo ? ` - Motivo: ${escapeHtml(ex.motivo)}` : '';
+				const executor = ex.medicoExecutor ? ` - Executor: ${escapeHtml(ex.medicoExecutor)}` : '';
+				const resultado = ex.resultado ? `<br/><span style="padding-left: 10px; color: #555;">Resultado: ${escapeHtml(ex.resultado)}</span>` : '';
+				parts.push(`<li><b>${escapeHtml(ex.nome)}</b>${data}${motivo}${executor}${resultado}</li>`);
+			});
+			parts.push('</ul>');
+			parts.push('</div>');
+		}
+
+		return parts.join('');
+	}
+
+	/**
+	 * Escapa caracteres HTML para segurança
+	 * @param {string | null | undefined} text
+	 * @returns {string}
+	 */
+	function escapeHtml(text) {
+		if (!text) return '';
+		return text
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
+	}
+
+	/**
+	 * Descreve a frequência do medicamento para PDF
+	 * @param {{ frequenciaTipo: string; diario?: { manha?: string; tarde?: string; noite?: string }; semanal?: string; intervalo?: string; especial?: string; doseQual?: string; }} med
+	 * @returns {string}
+	 */
+	function describeFrequencyForPDF(med) {
+		switch (med.frequenciaTipo) {
+			case 'diario':
+				const parts = [];
+				if (med.diario?.manha) parts.push(`Manhã: ${med.diario.manha}`);
+				if (med.diario?.tarde) parts.push(`Tarde: ${med.diario.tarde}`);
+				if (med.diario?.noite) parts.push(`Noite: ${med.diario.noite}`);
+				return parts.length > 0 ? parts.join(', ') : 'Diário';
+			case 'semanal':
+				return med.doseQual ? `${med.semanal || ''} (${med.doseQual})` : (med.semanal || '');
+			case 'intervalo':
+				return med.doseQual ? `A cada ${med.intervalo || ''} (${med.doseQual})` : `A cada ${med.intervalo || ''}`;
+			case 'especial':
+				return med.especial || '';
+			default:
+				return '';
+		}
+	}
+
+	// ==========================================
+	// FUNÇÃO DE LIMPEZA DE MEMÓRIA
+	// ==========================================
+
+	/**
+	 * Limpa a memória e inicia uma nova consulta
+	 * Reseta todos os arrays e estados para valores iniciais
+	 */
+	function limparMemoriaConsulta() {
+		// Limpa o store principal
+		clearConsultaDraft();
+
+		// Reseta arrays de doenças e medicamentos
+		diseases = [];
+		medications = [];
+
+		// Reseta exames laboratoriais e de imagem
+		laboratorioSelecionados = [];
+		imagemSelecionados = [];
+
+		// Reseta o estado objetivo para valores iniciais
+		objective = {
+			sinaisVitais: {
+				pas: '',
+				pad: '',
+				temperatura: '',
+				frequenciaCardiaca: '',
+				frequenciaRespiratoria: '',
+				spo2: ''
+			},
+			antropometria: {
+				altura: '',
+				peso: '',
+				circunferenciaAbdominal: '',
+				imc: ''
+			},
+			exameFisico: {
+				geral: '',
+				aparelhoDigestorio: '',
+				aparelhoCardiovascular: '',
+				sistemaLinfatico: '',
+				neurologico: '',
+				respiratorioInferior: '',
+				respiratorioSuperior: '',
+				ginecologico: {
+					mamas: {
+						inspecaoEstatica: {
+							posicao: '',
+							simetria: '',
+							volume: '',
+							mamilos: '',
+							ausenciaAbaulamentosRetracoes: false,
+							observacoes: ''
+						},
+						inspecaoDinamica: {
+							ausenciaAbaulamentosRetracoes: false,
+							observacoes: ''
+						},
+						palpacao: '',
+						expressao: {
+							resultado: '',
+							observacoes: ''
+						}
+					},
+					genitalia: {
+						externa: '',
+						interna: '',
+						toqueVaginal: ''
+					}
+				}
+			}
+		};
+
+		// Limpa a busca de CID
+		diseaseSearch = '';
+		diseaseSearchResults = [];
+
+		// Fecha o dialog
+		resetDialogRef?.close();
+
+		// Feedback visual
+		aviso = 'Memória limpa com sucesso! Nova consulta iniciada.';
+		setTimeout(() => (aviso = ''), 3000);
+	}
+
+	// ==========================================
 	// FUNÇÕES DE EXAMES LABORATORIAIS
 	// ==========================================
 
-	function openLaboratoryModal() {
+	async function openLaboratoryModal() {
 		labModo = 'pacote';
 		labPacoteSelecionado = '';
+		labDataExecucao = ''; // Reseta data de execução
 		labExameManual = { nome: '', valoresReferencia: '', unidade: '' };
 		labSearch = '';
 		labSearchResults = [];
+		labExamesEmEdicao = []; // Limpa exames em edição
 		labDialogRef?.showModal();
+		// Carrega os pacotes disponíveis
+		await carregarPacotesLaboratoriais();
 	}
 
 	function closeLaboratoryModal() {
 		labDialogRef?.close();
+	}
+
+	/**
+	 * Carrega a lista de pacotes únicos disponíveis
+	 */
+	async function carregarPacotesLaboratoriais() {
+		labPacotesLoading = true;
+		try {
+			const response = await fetch('/api/exames?listarPacotes=true');
+			const data = await response.json();
+			if (!response.ok) throw new Error(data?.error || 'Falha ao carregar pacotes.');
+			labPacotesDisponiveis = data.pacotes ?? [];
+		} catch (e) {
+			erro = e instanceof Error ? e.message : 'Erro ao carregar pacotes.';
+		} finally {
+			labPacotesLoading = false;
+		}
+	}
+
+	/**
+	 * Seleciona um pacote e carrega todos os exames associados
+	 * @param {string} pacote
+	 */
+	async function selecionarPacoteLaboratorial(pacote) {
+		if (!pacote) return;
+		// Verifica se a data foi preenchida
+		if (!labDataExecucao) {
+			erro = 'Informe a Data de Execução antes de selecionar um pacote.';
+			return;
+		}
+		labPacoteSelecionado = pacote;
+		labLoading = true;
+		try {
+			const response = await fetch(`/api/exames?pacote=${encodeURIComponent(pacote)}`);
+			const data = await response.json();
+			if (!response.ok) throw new Error(data?.error || 'Falha ao carregar exames do pacote.');
+
+			// Adiciona todos os exames do pacote à lista de edição
+			const examesDoPacote = (data.exames ?? []).map((/** @type {{ id: number; nome: string; valores_referencia: string | null; unidade_medida: string | null; significado: string | null; }} */ exame) => ({
+				id: createId(),
+				nome: exame.nome,
+				pacote: pacote,
+				valoresReferencia: exame.valores_referencia || '',
+				unidade: exame.unidade_medida || '',
+				significado: exame.significado || '',
+				dataExecucao: labDataExecucao,
+				resultado: '',
+				selecionado: false
+			}));
+
+			labExamesEmEdicao = [...labExamesEmEdicao, ...examesDoPacote];
+		} catch (e) {
+			erro = e instanceof Error ? e.message : 'Erro ao carregar exames do pacote.';
+		} finally {
+			labLoading = false;
+		}
+	}
+
+	/**
+	 * Remove um exame da lista de edição
+	 * @param {string} id
+	 */
+	function removerExameDaEdicao(id) {
+		labExamesEmEdicao = labExamesEmEdicao.filter(ex => ex.id !== id);
+	}
+
+	/**
+	 * Confirma os exames em edição e adiciona à lista principal
+	 */
+	function confirmarExamesLaboratoriais() {
+		if (labExamesEmEdicao.length === 0) {
+			erro = 'Nenhum exame selecionado.';
+			return;
+		}
+		// Valida que todos os exames têm data
+		if (!labExamesEmEdicao.every(ex => ex.dataExecucao)) {
+			erro = 'Todos os exames devem ter uma Data de Execução.';
+			return;
+		}
+		laboratorioSelecionados = [...laboratorioSelecionados, ...labExamesEmEdicao];
+		labExamesEmEdicao = [];
+		labPacoteSelecionado = '';
+		labDataExecucao = '';
+		closeLaboratoryModal();
 	}
 
 	async function buscarExamesLaboratoriais() {
@@ -1244,6 +2205,7 @@
 
 	function openImagemModal() {
 		imagemExameManual = '';
+		imagemDataRealizacao = '';
 		imagemSearch = '';
 		imagemSearchResults = [];
 		imagemDialogRef?.showModal();
@@ -1282,6 +2244,7 @@
 		const novoExame = {
 			id: createId(),
 			nome: procedimento.descricao,
+			dataRealizacao: imagemDataRealizacao,
 			motivo: '',
 			resultado: '',
 			medicoExecutor: ''
@@ -1297,12 +2260,14 @@
 		const novoExame = {
 			id: createId(),
 			nome: imagemExameManual.trim(),
+			dataRealizacao: imagemDataRealizacao,
 			motivo: '',
 			resultado: '',
 			medicoExecutor: ''
 		};
 		imagemSelecionados = [...imagemSelecionados, novoExame];
 		imagemExameManual = '';
+		imagemDataRealizacao = '';
 	}
 
 	/**
@@ -1311,6 +2276,71 @@
 	function excluirImagem(id) {
 		if (!window.confirm('Excluir este exame?')) return;
 		imagemSelecionados = [...imagemSelecionados.filter((item) => item.id !== id)];
+	}
+
+	async function carregarCalculadoras() {
+		calculadorasLoading = true;
+		try {
+			const res = await fetch('/api/calculadoras');
+			const data = await res.json();
+			if (res.ok) {
+				areasClinicas = data.areas || [];
+				calculadorasRisco = data.calculadoras || [];
+			}
+		} catch (e) {
+			console.error('Erro ao carregar calculadoras', e);
+		} finally {
+			calculadorasLoading = false;
+		}
+	}
+
+	function openCalculadorasModal() {
+		calculadorasTab = 'lista';
+		carregarCalculadoras();
+		calculadorasDialogRef?.showModal();
+	}
+
+	function closeCalculadorasModal() {
+		calculadorasDialogRef?.close();
+	}
+
+	async function salvarNovaArea() {
+		if (!novaAreaNome.trim()) return;
+		try {
+			const res = await fetch('/api/calculadoras', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ tipo: 'area', nome: novaAreaNome })
+			});
+			if (res.ok) {
+				novaAreaNome = '';
+				carregarCalculadoras();
+			} else {
+				alert('Erro ao salvar área');
+			}
+		} catch (e) {
+			alert('Erro na requisição');
+		}
+	}
+
+	async function salvarNovaCalculadora() {
+		if (!novaCalc.area_id || !novaCalc.nome.trim() || !novaCalc.link.trim()) return;
+		try {
+			const res = await fetch('/api/calculadoras', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ tipo: 'calculadora', ...novaCalc })
+			});
+			if (res.ok) {
+				novaCalc = { area_id: '', nome: '', descricao: '', link: '' };
+				carregarCalculadoras();
+				calculadorasTab = 'lista';
+			} else {
+				alert('Erro ao salvar calculadora');
+			}
+		} catch (e) {
+			alert('Erro na requisição');
+		}
 	}
 
 	onMount(() => {
@@ -1323,9 +2353,11 @@
 			}
 		});
 
-		// Carrega doenças e medicamentos de forma independente com reatividade garantida
+		// Carrega doenças, medicamentos e exames de forma independente com reatividade garantida
 		const storedDiseases = loadFromLocalStorage(DISEASES_STORAGE_KEY, []);
 		const storedMedications = loadFromLocalStorage(MEDICATIONS_STORAGE_KEY, []);
+		const storedLaboratorio = loadFromLocalStorage(LABORATORIO_STORAGE_KEY, []);
+		const storedImagem = loadFromLocalStorage(IMAGEM_STORAGE_KEY, []);
 		
 		if (Array.isArray(storedDiseases) && storedDiseases.length > 0) {
 			diseases = [...storedDiseases]; // Reatividade por propagação
@@ -1336,6 +2368,12 @@
 				diario: normalizeDailyFrequency(item.diario),
 				doseQual: item.doseQual || ''
 			})); // Reatividade por propagação via map
+		}
+		if (Array.isArray(storedLaboratorio) && storedLaboratorio.length > 0) {
+			laboratorioSelecionados = [...storedLaboratorio]; // Reatividade por propagação
+		}
+		if (Array.isArray(storedImagem) && storedImagem.length > 0) {
+			imagemSelecionados = [...storedImagem]; // Reatividade por propagação
 		}
 
 		carregarGuias();
@@ -1364,19 +2402,35 @@
 						Monte o raciocínio clínico com histórico estratificado por CID-10, medicações agrupadas por classe e textos-guia editáveis.
 					</p>
 				</div>
-				<div class="grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
-					<div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-						<p class="font-semibold text-slate-800">{diseases.length}</p>
-						<p>Doenças registradas</p>
+				<div class="flex flex-col gap-2">
+					<div class="grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+						<div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+							<p class="font-semibold text-slate-800">{diseases.length}</p>
+							<p>Doenças registradas</p>
+						</div>
+						<div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+							<p class="font-semibold text-slate-800">{medications.length}</p>
+							<p>Medicamentos ativos</p>
+						</div>
+						<div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+							<p class="font-semibold text-slate-800">{Object.values(familyHistory).filter((item) => item.checked).length}</p>
+							<p>Antecedentes familiares</p>
+						</div>
 					</div>
-					<div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-						<p class="font-semibold text-slate-800">{medications.length}</p>
-						<p>Medicamentos ativos</p>
-					</div>
-					<div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-						<p class="font-semibold text-slate-800">{Object.values(familyHistory).filter((item) => item.checked).length}</p>
-						<p>Antecedentes familiares</p>
-					</div>
+					<button
+						type="button"
+						on:click={exportarPDF}
+						class="w-full rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-red-700"
+					>
+						Exportar Consulta (PDF)
+					</button>
+					<button
+						type="button"
+						on:click={() => resetDialogRef?.showModal()}
+						class="w-full rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+					>
+						Limpar memória / Nova consulta
+					</button>
 				</div>
 			</div>
 		</header>
@@ -2025,12 +3079,174 @@
 
 							<!-- Exame Ginecológico (condicional) -->
 							{#if subjective.identificacao.sexo === 'Feminino'}
-								<div class="rounded-2xl border border-slate-200 bg-white p-3">
-									<div class="mb-2 flex items-center gap-2">
-										<span class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600">i</span>
-										<span class="text-xs font-semibold text-slate-700">Exame Ginecológico</span>
+								<div class="rounded-2xl border border-pink-200 bg-pink-50/30 p-4 lg:col-span-2">
+									<div class="mb-3 flex items-center gap-2">
+										<span class="flex h-6 w-6 items-center justify-center rounded-full border border-pink-300 text-xs text-pink-600">i</span>
+										<span class="text-sm font-semibold text-pink-800">Exame Ginecológico</span>
 									</div>
-									<textarea use:autogrow bind:value={objective.exameFisico.ginecologico} rows="3" placeholder="Inspeção, palpação mamária, exame especular, toque vaginal..." class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
+
+									<!-- Exame das Mamas -->
+									<details open class="mb-3 rounded-xl border border-pink-200 bg-white">
+										<summary class="cursor-pointer list-none px-3 py-2 text-xs font-semibold text-pink-700">Exame das Mamas</summary>
+										<div class="space-y-3 p-3">
+											<!-- Inspeção Estática -->
+											<div class="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+												<p class="mb-2 text-xs font-semibold text-slate-700">Inspeção Estática</p>
+												<div class="grid gap-2 text-xs">
+													<!-- Posição -->
+													<div class="flex flex-wrap items-center gap-2">
+														<span class="text-slate-600">Posição:</span>\t													<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.posicao} value="topicas" /> Tópicas</label>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.posicao} value="ptoticas" /> Ptóticas</label>
+													</div>
+													<!-- Simetria -->
+													<div class="flex flex-wrap items-center gap-2">
+														<span class="text-slate-600">Simetria:</span>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.simetria} value="simetricas" /> Simétricas</label>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.simetria} value="assimetricas" /> Assimétricas</label>
+													</div>
+													<!-- Volume -->
+													<div class="flex flex-wrap items-center gap-2">
+														<span class="text-slate-600">Volume:</span>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.volume} value="eutroficas" /> Eutróficas</label>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.volume} value="hipotroficas" /> Hipotróficas</label>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.volume} value="hipertroficas" /> Hipertróficas</label>
+													</div>
+													<!-- Mamilos -->
+													<div class="flex flex-wrap items-center gap-2">
+														<span class="text-slate-600">Mamilos:</span>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.mamilos} value="proeminentes" /> Proeminentes</label>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.mamilos} value="planos" /> Planos</label>
+														<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.mamilos} value="invertidos" /> Invertidos</label>
+													</div>
+													<!-- Checkbox isolado -->
+													<label class="flex items-center gap-2">
+														<input type="checkbox" bind:checked={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.ausenciaAbaulamentosRetracoes} />
+														<span>Ausência de abaulamentos e retrações</span>
+													</label>
+													<!-- Observações -->
+													<input bind:value={objective.exameFisico.ginecologico.mamas.inspecaoEstatica.observacoes} placeholder="Observações..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" />
+												</div>
+											</div>
+
+											<!-- Inspeção Dinâmica -->
+											<div class="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+												<p class="mb-2 text-xs font-semibold text-slate-700">Inspeção Dinâmica</p>
+												<label class="mb-2 flex items-center gap-2 text-xs">
+													<input type="checkbox" bind:checked={objective.exameFisico.ginecologico.mamas.inspecaoDinamica.ausenciaAbaulamentosRetracoes} />
+													<span>Ausência de abaulamentos ou retrações</span>
+												</label>
+												<input bind:value={objective.exameFisico.ginecologico.mamas.inspecaoDinamica.observacoes} placeholder="Observações..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" />
+											</div>
+
+											<!-- Palpação das Mamas -->
+											<div class="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+												<div class="mb-2 flex items-center justify-between">
+													<p class="text-xs font-semibold text-slate-700">Palpação das Mamas</p>
+													<button
+														type="button"
+														on:click={() => objective.exameFisico.ginecologico.mamas.palpacao = loadTemplate('mamas_palpacao', objective.exameFisico.ginecologico.mamas.palpacao)}
+														class="rounded-full bg-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-300"
+													>
+														Carregar Template
+													</button>
+												</div>
+												<textarea use:autogrow bind:value={objective.exameFisico.ginecologico.mamas.palpacao} rows="4" placeholder="Descreva a palpação das mamas..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs"></textarea>
+												<button
+													type="button"
+													disabled={savingGuide}
+													on:click={() => salvarTemplate('mamas_palpacao', objective.exameFisico.ginecologico.mamas.palpacao)}
+													class="mt-2 rounded-full bg-pink-600 px-3 py-1 text-xs text-white hover:bg-pink-700 disabled:opacity-50"
+												>
+													{savingGuide ? 'Salvando...' : 'Salvar como Template'}
+												</button>
+											</div>
+
+											<!-- Expressão -->
+											<div class="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+												<p class="mb-2 text-xs font-semibold text-slate-700">Expressão</p>
+												<div class="mb-2 flex flex-wrap items-center gap-3 text-xs">
+													<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.expressao.resultado} value="positiva" /> Positiva</label>
+													<label class="flex items-center gap-1"><input type="radio" bind:group={objective.exameFisico.ginecologico.mamas.expressao.resultado} value="negativa" /> Negativa</label>
+												</div>
+												<input bind:value={objective.exameFisico.ginecologico.mamas.expressao.observacoes} placeholder="Observações..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" />
+											</div>
+										</div>
+									</details>
+
+									<!-- Exame da Genitália -->
+									<details open class="rounded-xl border border-pink-200 bg-white">
+										<summary class="cursor-pointer list-none px-3 py-2 text-xs font-semibold text-pink-700">Exame da Genitália</summary>
+										<div class="space-y-3 p-3">
+											<!-- Genitália Externa -->
+											<div class="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+												<div class="mb-2 flex items-center justify-between">
+													<p class="text-xs font-semibold text-slate-700">Genitália Externa</p>
+													<button
+														type="button"
+														on:click={() => objective.exameFisico.ginecologico.genitalia.externa = loadTemplate('genitalia_externa', objective.exameFisico.ginecologico.genitalia.externa)}
+														class="rounded-full bg-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-300"
+													>
+														Carregar Template
+													</button>
+												</div>
+												<textarea use:autogrow bind:value={objective.exameFisico.ginecologico.genitalia.externa} rows="3" placeholder="Descreva o exame da genitália externa..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs"></textarea>
+												<button
+													type="button"
+													disabled={savingGuide}
+													on:click={() => salvarTemplate('genitalia_externa', objective.exameFisico.ginecologico.genitalia.externa)}
+													class="mt-2 rounded-full bg-pink-600 px-3 py-1 text-xs text-white hover:bg-pink-700 disabled:opacity-50"
+												>
+													{savingGuide ? 'Salvando...' : 'Salvar como Template'}
+												</button>
+											</div>
+
+											<!-- Genitália Interna -->
+											<div class="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+												<div class="mb-2 flex items-center justify-between">
+													<p class="text-xs font-semibold text-slate-700">Genitália Interna</p>
+													<button
+														type="button"
+														on:click={() => objective.exameFisico.ginecologico.genitalia.interna = loadTemplate('genitalia_interna', objective.exameFisico.ginecologico.genitalia.interna)}
+														class="rounded-full bg-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-300"
+													>
+														Carregar Template
+													</button>
+												</div>
+												<textarea use:autogrow bind:value={objective.exameFisico.ginecologico.genitalia.interna} rows="3" placeholder="Descreva o exame da genitália interna..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs"></textarea>
+												<button
+													type="button"
+													disabled={savingGuide}
+													on:click={() => salvarTemplate('genitalia_interna', objective.exameFisico.ginecologico.genitalia.interna)}
+													class="mt-2 rounded-full bg-pink-600 px-3 py-1 text-xs text-white hover:bg-pink-700 disabled:opacity-50"
+												>
+													{savingGuide ? 'Salvando...' : 'Salvar como Template'}
+												</button>
+											</div>
+
+											<!-- Toque Vaginal -->
+											<div class="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+												<div class="mb-2 flex items-center justify-between">
+													<p class="text-xs font-semibold text-slate-700">Toque Vaginal / Bimanual</p>
+													<button
+														type="button"
+														on:click={() => objective.exameFisico.ginecologico.genitalia.toqueVaginal = loadTemplate('genitalia_toque', objective.exameFisico.ginecologico.genitalia.toqueVaginal)}
+														class="rounded-full bg-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-300"
+													>
+														Carregar Template
+													</button>
+												</div>
+												<textarea use:autogrow bind:value={objective.exameFisico.ginecologico.genitalia.toqueVaginal} rows="3" placeholder="Descreva o toque vaginal..." class="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs"></textarea>
+												<button
+													type="button"
+													disabled={savingGuide}
+													on:click={() => salvarTemplate('genitalia_toque', objective.exameFisico.ginecologico.genitalia.toqueVaginal)}
+													class="mt-2 rounded-full bg-pink-600 px-3 py-1 text-xs text-white hover:bg-pink-700 disabled:opacity-50"
+												>
+													{savingGuide ? 'Salvando...' : 'Salvar como Template'}
+												</button>
+											</div>
+										</div>
+									</details>
 								</div>
 							{/if}
 						</div>
@@ -2072,41 +3288,66 @@
 										{/if}
 									</div>
 
-									{#each Object.entries(laboratorioAgrupado) as [pacote, itens]}
-										<div class="rounded-2xl border border-slate-200 bg-white p-3">
-											<h4 class="mb-2 text-xs font-semibold text-slate-900">{pacote || 'Exames Avulsos'}</h4>
-											<div class="overflow-x-auto">
-												<table class="w-full text-xs">
-													<thead class="bg-slate-100 text-slate-700">
-														<tr>
-															<th class="px-2 py-1 text-left"><input type="checkbox" checked={itens.every(i => i.selecionado)} on:change={() => toggleGrupoLaboratorio(itens)} /></th>
-															<th class="px-2 py-1 text-left">Exame</th>
-															<th class="px-2 py-1 text-left">Referência</th>
-															<th class="px-2 py-1 text-left">Unidade</th>
-															<th class="px-2 py-1 text-left">Resultado</th>
-															<th class="px-2 py-1 text-center">Ação</th>
-														</tr>
-													</thead>
-													<tbody>
-														{#each itens as item}
-															<tr class="border-t border-slate-100">
-																<td class="px-2 py-1"><input type="checkbox" bind:checked={item.selecionado} /></td>
-																<td class="px-2 py-1">{item.nome}</td>
-																<td class="px-2 py-1 text-slate-500">{item.valoresReferencia || '-'}</td>
-																<td class="px-2 py-1 text-slate-500">{item.unidade || '-'}</td>
-																<td class="px-2 py-1"><input bind:value={item.resultado} placeholder="Resultado..." class="w-full rounded border border-slate-300 px-2 py-1 text-xs" /></td>
-																<td class="px-2 py-1 text-center">
-																	<button type="button" on:click={() => excluirLaboratorio(item.id)} class="text-slate-400 hover:text-red-600" aria-label="Excluir exame">
-																		<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-																	</button>
-																</td>
+									<!-- Tabelas Pivot por Pacote: Exames em linhas, Datas em colunas -->
+									<div class="flex flex-col gap-4">
+										{#each laboratorioPivotPorPacote as pacoteData}
+											<div class="rounded-2xl border border-slate-200 bg-white p-3">
+												<h4 class="mb-2 font-semibold text-slate-900 px-2">{pacoteData.pacote}</h4>
+												<div class="overflow-x-auto">
+													<table class="w-full text-xs">
+														<thead class="bg-slate-100 text-slate-700">
+															<tr>
+																<th class="px-2 py-2 text-left sticky left-0 bg-slate-100 z-10">Exame</th>
+																<th class="px-2 py-2 text-left">Referência</th>
+																<th class="px-2 py-2 text-left">Unidade</th>
+																{#each pacoteData.datas as data}
+																	<th class="px-2 py-2 text-center min-w-[120px]">
+																		{data === 'Sem data' ? 'Sem data' : new Date(data).toLocaleDateString('pt-BR')}
+																	</th>
+																{/each}
 															</tr>
-														{/each}
-													</tbody>
-												</table>
+														</thead>
+														<tbody>
+															{#each pacoteData.exames as exame}
+																<tr class="border-t border-slate-100">
+																	<td class="px-2 py-2 sticky left-0 bg-white z-10">
+																		{#if exame.significado}
+																			<span class="group relative cursor-help border-b border-dotted border-slate-400" title={exame.significado}>
+																				{exame.nome}
+																				<div class="absolute left-0 top-full z-20 mt-1 hidden w-72 rounded-lg border border-slate-200 bg-white p-2 shadow-lg group-hover:block">
+																					<p class="text-xs text-slate-700">{exame.significado}</p>
+																				</div>
+																			</span>
+																		{:else}
+																			{exame.nome}
+																		{/if}
+																	</td>
+																	<td class="px-2 py-2 text-slate-500">{exame.valoresReferencia || '-'}</td>
+																	<td class="px-2 py-2 text-slate-500">{exame.unidade || '-'}</td>
+																	{#each pacoteData.datas as data}
+																		<td class="px-2 py-2">
+																			<input
+																				value={exame.resultadosPorData[data] || ''}
+																				on:input={(e) => {
+																					// Find and update the original item
+																					const item = laboratorioSelecionados.find(i => i.nome === exame.nome && (i.dataExecucao || 'Sem data') === data);
+																					const target = /** @type {HTMLInputElement} */ (e.target);
+																					if (item) item.resultado = target?.value || '';
+																					laboratorioSelecionados = [...laboratorioSelecionados]; // Trigger reactivity
+																				}}
+																				placeholder="..."
+																				class="w-full rounded border border-slate-300 px-2 py-1 text-xs text-center"
+																			/>
+																		</td>
+																	{/each}
+																</tr>
+															{/each}
+														</tbody>
+													</table>
+												</div>
 											</div>
-										</div>
-									{/each}
+										{/each}
+									</div>
 								</div>
 							{/if}
 						</div>
@@ -2134,7 +3375,12 @@
 									{#each imagemSelecionados as item}
 										<div class="rounded-2xl border border-slate-200 bg-white p-3">
 											<div class="mb-2 flex items-center justify-between">
-												<h4 class="text-sm font-semibold text-slate-900">{item.nome}</h4>
+												<div>
+													<h4 class="text-sm font-semibold text-slate-900">{item.nome}</h4>
+													{#if item.dataRealizacao}
+														<p class="text-xs text-slate-500">Data: {new Date(item.dataRealizacao).toLocaleDateString('pt-BR')}</p>
+													{/if}
+												</div>
 												<button type="button" on:click={() => excluirImagem(item.id)} class="text-slate-400 hover:text-red-600" aria-label="Excluir exame de imagem">
 													<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
 												</button>
@@ -2176,7 +3422,12 @@
 						<textarea use:autogrow bind:value={assessment.hipoteses} rows="6" placeholder="Hipóteses principais, diferenciais e justificativas." class="mt-3 w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
 					</section>
 					<section class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-						<h3 class="text-sm font-semibold text-slate-900">Estratificação de risco</h3>
+						<div class="flex items-center justify-between">
+							<h3 class="text-sm font-semibold text-slate-900">Estratificação de risco</h3>
+							<button type="button" on:click={openCalculadorasModal} class="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+								Escores de Risco
+							</button>
+						</div>
 						<textarea use:autogrow bind:value={assessment.riscos} rows="6" placeholder="Gravidade, sinais de alarme, risco cardiovascular, social ou funcional." class="mt-3 w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"></textarea>
 					</section>
 					<section class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -2459,52 +3710,104 @@
 	<div class="rounded-3xl border border-slate-200 bg-white p-5">
 		<div class="border-b border-slate-200 pb-4">
 			<h2 class="text-lg font-semibold text-slate-900">Adicionar Exame Laboratorial</h2>
-			<p class="text-xs text-slate-500">Busque por pacote ou adicione um exame manualmente.</p>
+			<p class="text-xs text-slate-500">Selecione um pacote para adicionar múltiplos exames ou adicione manualmente.</p>
 		</div>
 
-		<div class="mt-4 space-y-3">
+		<div class="mt-4 space-y-4">
 			<div class="flex gap-2">
 				<button type="button" on:click={() => (labModo = 'pacote')} class={`rounded-full px-4 py-2 text-xs ${labModo === 'pacote' ? 'bg-slate-900 text-white' : 'border border-slate-300 text-slate-600 hover:bg-slate-100'}`}>Por Pacote</button>
 				<button type="button" on:click={() => (labModo = 'manual')} class={`rounded-full px-4 py-2 text-xs ${labModo === 'manual' ? 'bg-slate-900 text-white' : 'border border-slate-300 text-slate-600 hover:bg-slate-100'}`}>Manual</button>
 			</div>
 
 			{#if labModo === 'pacote'}
-				<div class="grid gap-3 lg:grid-cols-2">
+				<!-- Seleção de Pacote -->
+				<div class="space-y-3">
+					<!-- Data de Execução (obrigatória) -->
 					<label class="space-y-1 text-xs text-slate-700">
-						<span>Buscar exame</span>
-						<input bind:value={labSearch} on:input={scheduleLabSearch} placeholder="Ex: hemograma, glicose..." class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+						<span>Data de Execução <span class="text-red-500">*</span></span>
+						<input type="date" bind:value={labDataExecucao} class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+						<p class="text-xs text-slate-500">Informe a data antes de selecionar um pacote</p>
 					</label>
-					<label class="space-y-1 text-xs text-slate-700">
-						<span>Ou selecione um pacote</span>
-						<select bind:value={labPacoteSelecionado} on:change={buscarExamesLaboratoriais} class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200">
-							<option value="">Todos os exames</option>
-							<option value="Check-up">Check-up</option>
-							<option value="Cardiológico">Cardiológico</option>
-							<option value="Renal">Renal</option>
-							<option value="Hepático">Hepático</option>
-							<option value="Ginecológico">Ginecológico</option>
-							<option value="Pré-operatório">Pré-operatório</option>
-						</select>
-					</label>
-				</div>
 
-				{#if labLoading || labSearchResults.length > 0}
-					<div class="rounded-2xl border border-slate-200 bg-slate-50 p-2">
-						{#if labLoading}
-							<p class="px-3 py-10 text-center text-xs text-slate-500">Buscando exames...</p>
+					<label class="space-y-1 text-xs text-slate-700">
+						<span>Selecione um pacote de exames</span>
+						{#if labPacotesLoading}
+							<div class="flex items-center gap-2 rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2">
+								<div class="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"></div>
+								<span class="text-sm text-slate-500">Carregando pacotes...</span>
+							</div>
 						{:else}
-							<div class="max-h-60 space-y-2 overflow-y-auto">
-								{#each labSearchResults as exame}
-									<button type="button" on:click={() => adicionarExameLaboratorial(exame)} class="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100">
-										<p class="text-sm font-semibold text-slate-900">{exame.nome}</p>
-										<p class="mt-1 text-xs text-slate-500">{exame.pacote || 'Exame Avulso'} {exame.valores_referencia ? `• Ref: ${exame.valores_referencia}` : ''}</p>
-									</button>
+							<select bind:value={labPacoteSelecionado} on:change={() => labPacoteSelecionado && selecionarPacoteLaboratorial(labPacoteSelecionado)} disabled={!labDataExecucao} class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100 disabled:text-slate-400">
+								<option value="">{labDataExecucao ? 'Escolha um pacote...' : 'Informe a data acima primeiro'}</option>
+								{#each labPacotesDisponiveis as pacote}
+									<option value={pacote}>{pacote}</option>
+								{/each}
+							</select>
+						{/if}
+					</label>
+
+					<!-- Lista de Exames em Edição -->
+					{#if labExamesEmEdicao.length > 0}
+						<div class="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+							<div class="mb-2 flex items-center justify-between">
+								<h3 class="text-sm font-semibold text-slate-900">Exames selecionados ({labExamesEmEdicao.length})</h3>
+								<p class="text-xs text-slate-500">Edite os valores de referência antes de confirmar</p>
+							</div>
+							<div class="max-h-72 space-y-2 overflow-y-auto">
+								{#each labExamesEmEdicao as exame, index (exame.id)}
+									<div class="rounded-xl border border-slate-200 bg-white p-3">
+										<div class="mb-2 flex items-center justify-between">
+											<div class="group relative flex items-center gap-2">
+												{#if exame.significado}
+													<p class="cursor-help border-b border-dotted border-slate-400 text-sm font-semibold text-slate-900" title={exame.significado}>{exame.nome}</p>
+													<!-- Tooltip -->
+													<div class="absolute left-0 top-full z-10 mt-1 hidden w-72 rounded-lg border border-slate-200 bg-white p-2 shadow-lg group-hover:block">
+														<p class="text-xs text-slate-700">{exame.significado}</p>
+													</div>
+												{:else}
+													<p class="text-sm font-semibold text-slate-900">{exame.nome}</p>
+												{/if}
+											</div>
+											<button type="button" on:click={() => removerExameDaEdicao(exame.id)} class="rounded-full p-1.5 text-red-600 hover:bg-red-50" title="Remover exame">
+												<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+												</svg>
+											</button>
+										</div>
+										<div class="grid gap-2 sm:grid-cols-2">
+											<label class="space-y-1 text-xs text-slate-700">
+												<span>Valores de Referência</span>
+												<input bind:value={labExamesEmEdicao[index].valoresReferencia} placeholder="Ex: 70-100 mg/dL" class="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+											</label>
+											<label class="space-y-1 text-xs text-slate-700">
+												<span>Unidade</span>
+												<input bind:value={labExamesEmEdicao[index].unidade} placeholder="Ex: mg/dL" class="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+											</label>
+										</div>
+									</div>
 								{/each}
 							</div>
+							<div class="mt-3 flex justify-end">
+								<button type="button" on:click={confirmarExamesLaboratoriais} class="rounded-full bg-slate-900 px-4 py-2 text-xs font-medium text-white hover:bg-slate-800">
+									Confirmar ({labExamesEmEdicao.length} exame{labExamesEmEdicao.length > 1 ? 's' : ''})
+								</button>
+							</div>
+						</div>
+					{:else if labPacoteSelecionado}
+						{#if labLoading}
+							<div class="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 py-8">
+								<div class="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"></div>
+								<span class="text-sm text-slate-500">Carregando exames do pacote...</span>
+							</div>
+						{:else}
+							<div class="rounded-2xl border border-slate-200 bg-slate-50 py-8 text-center">
+								<p class="text-sm text-slate-500">Selecione um pacote para visualizar os exames</p>
+							</div>
 						{/if}
-					</div>
-				{/if}
+					{/if}
+				</div>
 			{:else}
+				<!-- Modo Manual -->
 				<div class="grid gap-3">
 					<label class="space-y-1 text-xs text-slate-700">
 						<span>Nome do exame</span>
@@ -2540,6 +3843,12 @@
 		</div>
 
 		<div class="mt-4 space-y-3">
+			<!-- Data de Realização -->
+			<label class="space-y-1 text-xs text-slate-700">
+				<span>Data de Realização</span>
+				<input type="date" bind:value={imagemDataRealizacao} class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
+			</label>
+
 			<label class="space-y-1 text-xs text-slate-700">
 				<span>Buscar procedimento</span>
 				<input bind:value={imagemSearch} on:input={scheduleImagemSearch} placeholder="Ex: radiografia, tomografia..." class="w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" />
@@ -2572,6 +3881,176 @@
 
 		<div class="mt-5 flex justify-end gap-2">
 			<button type="button" on:click={closeImagemModal} class="rounded-full border border-slate-300 px-4 py-2 text-xs text-slate-600 hover:bg-slate-100">Fechar</button>
+		</div>
+	</div>
+</dialog>
+
+<!-- Reset Confirmation Dialog -->
+<dialog bind:this={resetDialogRef} class="rounded-3xl p-0 shadow-2xl backdrop:bg-slate-900/50">
+	<div class="w-[400px] bg-white p-6">
+		<div class="mb-4 text-center">
+			<div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+				<svg class="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+				</svg>
+			</div>
+			<h3 class="text-lg font-semibold text-slate-900">Limpar memória?</h3>
+			<p class="mt-2 text-sm text-slate-600">
+				Esta ação irá apagar todos os dados da consulta atual (doenças, medicamentos, exames, etc.).
+				<br><br>
+				<strong>Esta ação não pode ser desfeita.</strong>
+			</p>
+		</div>
+
+		<div class="flex gap-3">
+			<button
+				type="button"
+				on:click={() => resetDialogRef?.close()}
+				class="flex-1 rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+			>
+				Cancelar
+			</button>
+			<button
+				type="button"
+				on:click={limparMemoriaConsulta}
+				class="flex-1 rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+			>
+				Sim, limpar
+			</button>
+		</div>
+	</div>
+</dialog>
+<!-- Modal de Escores de Risco -->
+<dialog bind:this={calculadorasDialogRef} class="w-full max-w-4xl rounded-3xl p-0 backdrop:bg-slate-950/30">
+	<div class="flex h-full max-h-[85vh] flex-col bg-white">
+		<div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+			<h3 class="text-lg font-semibold text-slate-900">Escores de Risco e Calculadoras</h3>
+			<button type="button" on:click={closeCalculadorasModal} class="text-slate-400 hover:text-slate-600">
+				✕
+			</button>
+		</div>
+
+		<!-- Abas -->
+		<div class="flex gap-4 border-b border-slate-200 px-6">
+			<button
+				type="button"
+				class="border-b-2 px-1 py-3 text-sm font-medium {calculadorasTab === 'lista' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}"
+				on:click={() => (calculadorasTab = 'lista')}
+			>
+				Calculadoras Salvas
+			</button>
+			<button
+				type="button"
+				class="border-b-2 px-1 py-3 text-sm font-medium {calculadorasTab === 'gerenciar' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}"
+				on:click={() => (calculadorasTab = 'gerenciar')}
+			>
+				Gerenciar Calculadoras
+			</button>
+		</div>
+
+		<div class="flex-1 overflow-y-auto p-6">
+			{#if calculadorasLoading}
+				<div class="py-8 text-center text-slate-500">Carregando...</div>
+			{:else if calculadorasTab === 'lista'}
+				{#if areasClinicas.length === 0}
+					<div class="py-8 text-center text-slate-500">
+						Nenhuma área clínica ou calculadora salva.
+						<br/>Vá para a aba "Gerenciar Calculadoras" para adicionar.
+					</div>
+				{:else}
+					<div class="flex flex-col gap-8">
+						{#each Object.entries(calculadorasPorArea) as [areaNome, calcs]}
+							<div>
+								<h4 class="mb-4 text-base font-semibold text-slate-800 border-b border-slate-100 pb-2">{areaNome}</h4>
+								{#if calcs.length === 0}
+									<p class="text-sm text-slate-500 italic">Nenhuma calculadora nesta área.</p>
+								{:else}
+									<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+										{#each calcs as calc}
+											<div class="flex flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4 transition-colors hover:border-slate-300">
+												<h5 class="font-semibold text-slate-900">{calc.nome}</h5>
+												{#if calc.descricao}
+													<p class="mt-1 text-xs text-slate-600 line-clamp-2">{calc.descricao}</p>
+												{/if}
+												<div class="mt-auto pt-3">
+													<a href={calc.link} target="_blank" rel="noopener noreferrer" class="inline-flex items-center text-xs font-medium text-blue-600 hover:text-blue-800">
+														Abrir Calculadora ↗
+													</a>
+												</div>
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+			{:else}
+				<div class="grid gap-8 lg:grid-cols-2">
+					<!-- Nova Área -->
+					<div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+						<h4 class="mb-4 font-semibold text-slate-900">Nova Área Clínica</h4>
+						<div class="flex flex-col gap-3">
+							<input
+								type="text"
+								bind:value={novaAreaNome}
+								placeholder="Ex: Cardiologia, Nefrologia"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<button
+								type="button"
+								on:click={salvarNovaArea}
+								disabled={!novaAreaNome.trim()}
+								class="w-full rounded-xl bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+							>
+								Salvar Área
+							</button>
+						</div>
+					</div>
+
+					<!-- Nova Calculadora -->
+					<div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+						<h4 class="mb-4 font-semibold text-slate-900">Nova Calculadora</h4>
+						<div class="flex flex-col gap-3">
+							<select
+								bind:value={novaCalc.area_id}
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							>
+								<option value="">Selecione a Área...</option>
+								{#each areasClinicas as area}
+									<option value={area.id}>{area.nome}</option>
+								{/each}
+							</select>
+							<input
+								type="text"
+								bind:value={novaCalc.nome}
+								placeholder="Nome (ex: ASCVD Risk)"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<input
+								type="text"
+								bind:value={novaCalc.descricao}
+								placeholder="Descrição (opcional)"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<input
+								type="url"
+								bind:value={novaCalc.link}
+								placeholder="URL (https://...)"
+								class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+							/>
+							<button
+								type="button"
+								on:click={salvarNovaCalculadora}
+								disabled={!novaCalc.area_id || !novaCalc.nome.trim() || !novaCalc.link.trim()}
+								class="mt-2 w-full rounded-xl bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+							>
+								Salvar Calculadora
+							</button>
+						</div>
+					</div>
+				</div>
+			{/if}
 		</div>
 	</div>
 </dialog>

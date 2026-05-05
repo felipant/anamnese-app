@@ -22,21 +22,38 @@ export async function GET(event) {
 	try {
 		const db = getDb(event);
 		const pacote = event.url.searchParams.get('pacote')?.trim() ?? '';
+		const listarPacotes = event.url.searchParams.get('listarPacotes') === 'true';
 		const filter = pacote ? `%${pacote}%` : null;
+
 		if (!db) {
 			return json({
 				exames: [],
+				pacotes: [],
 				warning: 'D1 local ainda não está disponível neste runtime.'
 			});
 		}
+
+		// Endpoint para listar pacotes únicos
+		if (listarPacotes) {
+			const stmt = db.prepare(
+				'SELECT DISTINCT pacote FROM exames WHERE pacote IS NOT NULL AND pacote != "" ORDER BY pacote ASC'
+			);
+			const result = await stmt.all();
+			/** @type {Array<{pacote: string}>} */
+			const rows = /** @type {any} */ (result.results ?? []);
+			const pacotes = rows.map(r => r.pacote).filter(p => p);
+			return json({ pacotes });
+		}
+
+		// Endpoint padrão para listar exames
 		const stmt = pacote
 			? db
 					.prepare(
-						'SELECT id, material, nome, pacote, unidade_medida, valores_referencia FROM exames WHERE COALESCE(pacote, "") LIKE ? ORDER BY nome ASC'
+						'SELECT id, material, nome, pacote, unidade_medida, valores_referencia, significado FROM exames WHERE COALESCE(pacote, "") LIKE ? ORDER BY nome ASC'
 					)
 					.bind(filter)
 			: db.prepare(
-					'SELECT id, material, nome, pacote, unidade_medida, valores_referencia FROM exames ORDER BY nome ASC'
+					'SELECT id, material, nome, pacote, unidade_medida, valores_referencia, significado FROM exames ORDER BY nome ASC'
 				);
 		const result = await stmt.all();
 
@@ -45,6 +62,7 @@ export async function GET(event) {
 		if (isTableMissingError(error)) {
 			return json({
 				exames: [],
+				pacotes: [],
 				warning: 'Tabela "exames" não encontrada. Execute a migração do schema.'
 			});
 		}
@@ -71,6 +89,7 @@ export async function POST(event) {
 		const pacote = body?.pacote?.trim() ?? '';
 		const unidadeMedida = body?.unidade_medida?.trim() ?? '';
 		const valoresReferencia = body?.valores_referencia?.trim() ?? '';
+		const significado = body?.significado?.trim() ?? '';
 
 		if (!material || !nome) {
 			return json({ error: 'Material e nome são obrigatórios.' }, { status: 400 });
@@ -78,9 +97,9 @@ export async function POST(event) {
 
 		const insert = await db
 			.prepare(
-				'INSERT INTO exames (material, nome, pacote, unidade_medida, valores_referencia) VALUES (?, ?, ?, ?, ?)'
+				'INSERT INTO exames (material, nome, pacote, unidade_medida, valores_referencia, significado) VALUES (?, ?, ?, ?, ?, ?)'
 			)
-			.bind(material, nome, pacote, unidadeMedida, valoresReferencia)
+			.bind(material, nome, pacote, unidadeMedida, valoresReferencia, significado)
 			.run();
 
 		return json({
@@ -115,6 +134,7 @@ export async function PUT(event) {
 		const pacote = body?.pacote?.trim() ?? '';
 		const unidadeMedida = body?.unidade_medida?.trim() ?? '';
 		const valoresReferencia = body?.valores_referencia?.trim() ?? '';
+		const significado = body?.significado?.trim() ?? '';
 
 		if (!id || !material || !nome) {
 			return json({ error: 'ID, material e nome são obrigatórios.' }, { status: 400 });
@@ -122,9 +142,9 @@ export async function PUT(event) {
 
 		await db
 			.prepare(
-				'UPDATE exames SET material = ?, nome = ?, pacote = ?, unidade_medida = ?, valores_referencia = ? WHERE id = ?'
+				'UPDATE exames SET material = ?, nome = ?, pacote = ?, unidade_medida = ?, valores_referencia = ?, significado = ? WHERE id = ?'
 			)
-			.bind(material, nome, pacote, unidadeMedida, valoresReferencia, id)
+			.bind(material, nome, pacote, unidadeMedida, valoresReferencia, significado, id)
 			.run();
 
 		return json({ ok: true });

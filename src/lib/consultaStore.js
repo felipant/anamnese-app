@@ -3,6 +3,12 @@ import { writable } from 'svelte/store';
 
 export const CONSULTA_DRAFT_STORAGE_KEY = 'consulta-medica-draft-v1';
 
+// Chaves para persistência independente
+export const DISEASES_STORAGE_KEY = 'consulta-doencas-v1';
+export const MEDICATIONS_STORAGE_KEY = 'consulta-medicamentos-v1';
+export const LABORATORIO_STORAGE_KEY = 'consulta-laboratorio-v1';
+export const IMAGEM_STORAGE_KEY = 'consulta-imagem-v1';
+
 export function createEmptyConsultaDraft() {
 	return {
 		version: 1,
@@ -42,10 +48,19 @@ if (browser) {
 	});
 }
 
+/**
+ * Limpa completamente todos os dados da consulta, incluindo localStorage
+ */
 export function clearConsultaDraft() {
 	if (browser) {
 		skipNextPersist = true;
+		// Remove chave principal
 		localStorage.removeItem(CONSULTA_DRAFT_STORAGE_KEY);
+		// Remove chaves de persistência independente
+		localStorage.removeItem(DISEASES_STORAGE_KEY);
+		localStorage.removeItem(MEDICATIONS_STORAGE_KEY);
+		localStorage.removeItem(LABORATORIO_STORAGE_KEY);
+		localStorage.removeItem(IMAGEM_STORAGE_KEY);
 	}
 	consultaDraft.set(createEmptyConsultaDraft());
 }
