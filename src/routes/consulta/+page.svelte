@@ -9,7 +9,6 @@
 		IMAGEM_STORAGE_KEY
 	} from '$lib/consultaStore';
 	import { loadFromLocalStorage, saveToLocalStorage } from '$lib/useLocalStorage.js';
-	import html2pdf from 'html2pdf.js';
 
 	/** @typedef {{ id: number; subcat: string; subcat_desc: string; grupo: string; cat: string; cat_desc: string; cap: string; cap_desc: string; }} CidSearchItem */
 	/** @typedef {{ sourceId: number | null; principio_ativo: string; concentracao: string; classe: string; forma_farmaceutica: string; fornecimento_sus: string; observacoes: string; frequenciaTipo: string; diario: { manha: string; tarde: string; noite: string; }; semanal: string; intervalo: string; especial: string; doseQual: string; }} MedicationForm */
@@ -1382,43 +1381,50 @@
 	// ==========================================
 
 	/**
-	 * Gera e exporta a consulta completa em formato PDF
+	 * Gera e exporta a consulta completa usando a impressão nativa do navegador
 	 */
 	async function exportarPDF() {
 		try {
-			// Monta o conteúdo HTML para o PDF
+			// Monta o conteúdo HTML
 			const htmlContent = gerarHTMLPDF();
 
-			// Configurações do PDF
-			const opt = {
-				margin: [15, 15, 15, 15],
-				filename: `Consulta_Paciente_${new Date().toISOString().split('T')[0]}.pdf`,
-				image: { type: 'jpeg', quality: 0.98 },
-				html2canvas: { scale: 2, useCORS: true, logging: true },
-				jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+			// Abre uma nova janela para impressão
+			const printWindow = window.open('', '_blank', 'width=800,height=600');
+			if (!printWindow) {
+				throw new Error('Pop-up bloqueado pelo navegador. Por favor, permita pop-ups para imprimir.');
+			}
+			
+			printWindow.document.write(`
+				<!DOCTYPE html>
+				<html>
+				<head>
+					<title>Consulta_Paciente_${new Date().toISOString().split('T')[0]}</title>
+					<style>
+						body { font-family: sans-serif; padding: 20px; color: #000; }
+						@media print {
+							@page { margin: 15mm; }
+							body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+						}
+					</style>
+				</head>
+				<body>
+					${htmlContent}
+				</body>
+				</html>
+			`);
+			printWindow.document.close();
+			
+			// Executa a impressão quando a nova janela carregar
+			printWindow.onload = function() {
+				printWindow.print();
+				setTimeout(function() { printWindow.close(); }, 500);
 			};
 
-			// Container temporário (off-screen) para evitar erro de elementos colapsados
-			const container = document.createElement('div');
-			container.style.position = 'absolute';
-			container.style.top = '-99999px';
-			container.style.left = '-99999px';
-			container.style.width = '800px';
-			container.style.backgroundColor = '#ffffff';
-			container.innerHTML = htmlContent;
-			document.body.appendChild(container);
-
-			// Gera o PDF
-			await html2pdf().set(opt).from(container).save();
-			
-			// Limpa o container
-			document.body.removeChild(container);
-
-			aviso = 'PDF gerado e baixado com sucesso!';
+			aviso = 'Janela de impressão aberta!';
 			setTimeout(() => (aviso = ''), 3000);
 		} catch (err) {
-			erro = 'Erro ao gerar PDF. Tente novamente.';
-			console.error('Erro ao gerar PDF:', err);
+			erro = 'Erro ao gerar impressão: ' + (err.message || 'Erro desconhecido');
+			console.error('Erro detalhado ao gerar impressão:', err);
 		}
 	}
 
@@ -1996,6 +2002,27 @@
 			}
 		};
 
+		// Reseta estados subjetivos, avaliação e plano
+		subjective = {
+			identificacao: {
+				idade: '', ocupacao: '', naturalidade: '', acompanhante: '', sexo: '',
+				genero: '', generoOutro: '', raca: '', racaOutro: '',
+				estadoCivil: '', estadoCivilOutro: '', escolaridade: '', escolaridadeOutro: '',
+				religiao: '', religiaoOutro: ''
+			},
+			queixaPrincipal: '', hma: '', revisaoSistemas: '',
+			patologicos: { alergia: '', cirurgias: '', internacoes: '', traumatismos: '' },
+			historiaFamiliar: '', ocupacional: '', psicossocial: '', habitos: '',
+			recordatorioAlimentar: { cafeManha: '', lancheManha: '', almoco: '', lancheTarde: '', cafeTarde: '', lancheAntesJantar: '', jantar: '', lancheDepoisJantar: '' },
+			ginecologica: { g: '', p: '', n: '', c: '', a: '', e: '', dum: '', mac: '' }
+		};
+
+		assessment = { hipoteses: '', riscos: '', observacoes: '' };
+		
+		plan = { condutas: '', prescricao: '', seguimento: '' };
+
+		familyHistory = createEmptyFamilyHistory();
+
 		// Limpa a busca de CID
 		diseaseSearch = '';
 		diseaseSearchResults = [];
@@ -2295,9 +2322,14 @@
 	}
 
 	function openCalculadorasModal() {
+		console.log('Tentando abrir modal. DialogRef:', calculadorasDialogRef);
 		calculadorasTab = 'lista';
 		carregarCalculadoras();
-		calculadorasDialogRef?.showModal();
+		if (calculadorasDialogRef) {
+			calculadorasDialogRef.showModal();
+		} else {
+			alert('Erro: A janela pop-up não pôde ser instanciada pelo navegador.');
+		}
 	}
 
 	function closeCalculadorasModal() {
