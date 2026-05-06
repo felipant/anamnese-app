@@ -1122,74 +1122,90 @@
 	async function exportarSubjetivo() {
 		const lines = [];
 		
-		// Título principal
-		lines.push('## ANAMNESE (S)');
+		// Título principal (CAIXA ALTA, nível 1)
+		lines.push('ANAMNESE (S)');
 		lines.push('');
 
-		// Itera sobre o schema
-		for (const [key, config] of Object.entries(subjetivoSchema)) {
-			const data = /** @type {any} */ (subjective)[key];
-			
-			// Verifica condição (ex: ginecológica só aparece se sexo feminino)
-			if (config.condition && !config.condition(subjective)) continue;
-			
-			if (config.isSimple) {
-				// Campos simples (string direta)
-				if (!isEmpty(data)) {
-					lines.push(`**${config.label}**`);
-					lines.push(data);
-					lines.push('');
-				}
-			} else if (config.fields) {
-				// Campos compostos (objetos com múltiplos campos)
-				const validFields = [];
-				
-				for (const [fieldKey, fieldConfig] of Object.entries(config.fields)) {
-					const value = data?.[fieldKey];
-					if (!isEmpty(value)) {
-						const formatted = fieldConfig.formatter(value, data);
-						validFields.push(`**${fieldConfig.label}:** ${formatted}`);
-					}
-				}
-				
-				// Só adiciona a seção se houver campos válidos
-				if (validFields.length > 0) {
-					lines.push(`**${config.title}**`);
-					lines.push(...validFields);
-					lines.push('');
-				}
-			}
+		// Identificação
+		const id = subjective.identificacao;
+		const idFields = [
+			id.idade ? `Idade: ${id.idade}` : '',
+			id.ocupacao ? `Ocupação: ${id.ocupacao}` : '',
+			id.naturalidade ? `Naturalidade: ${id.naturalidade}` : '',
+			id.acompanhante ? `Acompanhante: ${id.acompanhante}` : '',
+			id.sexo ? `Sexo biológico: ${id.sexo}` : '',
+			id.genero ? `Gênero: ${id.genero === 'Outros' ? id.generoOutro || id.genero : id.genero}` : '',
+			id.raca ? `Raça: ${id.raca === 'Outros' ? id.racaOutro || id.raca : id.raca}` : '',
+			id.estadoCivil ? `Estado civil: ${id.estadoCivil === 'Outros' ? id.estadoCivilOutro || id.estadoCivil : id.estadoCivil}` : '',
+			id.escolaridade ? `Escolaridade: ${id.escolaridade === 'Outros' ? id.escolaridadeOutro || id.escolaridade : id.escolaridade}` : '',
+			id.religiao ? `Religião: ${id.religiao === 'Outros' ? id.religiaoOutro || id.religiao : id.religiao}` : ''
+		].filter(Boolean);
+		if (idFields.length > 0) {
+			lines.push('IDENTIFICAÇÃO');
+			idFields.forEach(f => lines.push(`   ${f}`));
+			lines.push('');
+		}
+
+		// Campos simples
+		if (!isEmpty(subjective.queixaPrincipal)) {
+			lines.push('QUEIXA PRINCIPAL');
+			lines.push(`   ${subjective.queixaPrincipal}`);
+			lines.push('');
+		}
+		if (!isEmpty(subjective.hma)) {
+			lines.push('HMA');
+			lines.push(`   ${subjective.hma}`);
+			lines.push('');
+		}
+		if (!isEmpty(subjective.revisaoSistemas)) {
+			lines.push('REVISÃO DE SISTEMAS');
+			lines.push(`   ${subjective.revisaoSistemas}`);
+			lines.push('');
+		}
+
+		// História Patológica Pregressa
+		const pat = subjective.patologicos;
+		const patFields = [
+			pat.alergia ? `Alergia: ${pat.alergia}` : '',
+			pat.cirurgias ? `Cirurgias: ${pat.cirurgias}` : '',
+			pat.internacoes ? `Internações: ${pat.internacoes}` : '',
+			pat.traumatismos ? `Traumatismos: ${pat.traumatismos}` : ''
+		].filter(Boolean);
+		if (patFields.length > 0) {
+			lines.push('HISTÓRIA PATOLÓGICA PREGRESSA');
+			patFields.forEach(f => lines.push(`   • ${f}`));
+			lines.push('');
 		}
 
 		// Doenças estratificadas
 		if (diseases.length > 0) {
-			lines.push('**DOENÇAS ESTRATIFICADAS**');
-			for (const disease of diseases) {
+			lines.push('DOENÇAS ESTRATIFICADAS');
+			diseases.forEach((disease, i) => {
 				const parts = [disease.subcat_desc];
 				if (disease.subcat) parts.push(`(${disease.subcat})`);
 				if (disease.mesAnoDiagnostico) parts.push(`- Diagnóstico: ${disease.mesAnoDiagnostico}`);
-				lines.push(`- ${parts.join(' ')}`);
-				if (disease.historico) lines.push(`  Histórico: ${disease.historico}`);
-				if (disease.queixasAtuais) lines.push(`  Queixas atuais: ${disease.queixasAtuais}`);
-			}
+				lines.push(`   ${i + 1}. ${parts.join(' ')}`);
+				if (disease.historico) lines.push(`      Histórico: ${disease.historico}`);
+				if (disease.queixasAtuais) lines.push(`      Queixas atuais: ${disease.queixasAtuais}`);
+			});
 			lines.push('');
 		}
 
 		// Medicamentos
 		if (medications.length > 0) {
-			lines.push('**MEDICAMENTOS EM USO**');
-			for (const med of medications) {
+			lines.push('MEDICAMENTOS EM USO');
+			medications.forEach((med, i) => {
 				const freq = describeFrequency(med);
-				lines.push(`- ${med.principio_ativo} ${med.concentracao ? `(${med.concentracao})` : ''} - ${freq}`);
-				if (med.observacoes) lines.push(`  Obs: ${med.observacoes}`);
-			}
+				lines.push(`   ${i + 1}. ${med.principio_ativo}${med.concentracao ? ` ${med.concentracao}` : ''} - ${freq}`);
+				if (med.observacoes) lines.push(`      Obs: ${med.observacoes}`);
+			});
 			lines.push('');
 		}
 
-		// História familiar
+		// História Familiar
 		const familyHistoryEntries = Object.entries(familyHistory).filter(([_, entry]) => entry.checked);
 		if (familyHistoryEntries.length > 0) {
-			lines.push('**HISTÓRIA FAMILIAR**');
+			lines.push('HISTÓRIA FAMILIAR');
 			for (const [key, entry] of familyHistoryEntries) {
 				const option = familyHistoryOptions.find((o) => o.id === key);
 				if (!option) continue;
@@ -1197,13 +1213,68 @@
 					return [p.parentesco, p.idade].filter(Boolean).join(' - ');
 				});
 				if (parentes.length > 0) {
-					lines.push(`- ${option.label}: ${parentes.join(', ')}`);
+					lines.push(`   • ${option.label}: ${parentes.join(', ')}`);
 				} else {
-					lines.push(`- ${option.label}`);
+					lines.push(`   • ${option.label}`);
 				}
-				if (entry.detalhes) lines.push(`  Detalhes: ${entry.detalhes}`);
+				if (entry.detalhes) lines.push(`      Detalhes: ${entry.detalhes}`);
 			}
 			lines.push('');
+		}
+
+		// Campos restantes
+		if (!isEmpty(subjective.ocupacional)) {
+			lines.push('HISTÓRIA OCUPACIONAL');
+			lines.push(`   ${subjective.ocupacional}`);
+			lines.push('');
+		}
+		if (!isEmpty(subjective.psicossocial)) {
+			lines.push('HISTÓRIA PSICOSSOCIAL');
+			lines.push(`   ${subjective.psicossocial}`);
+			lines.push('');
+		}
+		if (!isEmpty(subjective.habitos)) {
+			lines.push('HÁBITOS DE VIDA');
+			lines.push(`   ${subjective.habitos}`);
+			lines.push('');
+		}
+
+		// Recordatório Alimentar
+		const ra = subjective.recordatorioAlimentar;
+		const raFields = [
+			ra.cafeManha ? `Café da manhã: ${ra.cafeManha}` : '',
+			ra.lancheManha ? `Lanche da manhã: ${ra.lancheManha}` : '',
+			ra.almoco ? `Almoço: ${ra.almoco}` : '',
+			ra.lancheTarde ? `Lanche da tarde: ${ra.lancheTarde}` : '',
+			ra.cafeTarde ? `Café da tarde: ${ra.cafeTarde}` : '',
+			ra.lancheAntesJantar ? `Lanche antes do jantar: ${ra.lancheAntesJantar}` : '',
+			ra.jantar ? `Jantar: ${ra.jantar}` : '',
+			ra.lancheDepoisJantar ? `Lanche depois do jantar: ${ra.lancheDepoisJantar}` : ''
+		].filter(Boolean);
+		if (raFields.length > 0) {
+			lines.push('RECORDATÓRIO ALIMENTAR');
+			raFields.forEach(f => lines.push(`   • ${f}`));
+			lines.push('');
+		}
+
+		// História Ginecológica
+		if (subjective.identificacao.sexo === 'Feminino') {
+			const gineco = subjective.ginecologica;
+			const ginecoFields = [
+				gineco.g ? `G: ${gineco.g}` : '',
+				gineco.p ? `P: ${gineco.p}` : '',
+				gineco.n ? `N: ${gineco.n}` : '',
+				gineco.c ? `C: ${gineco.c}` : '',
+				gineco.a ? `A: ${gineco.a}` : '',
+				gineco.e ? `E: ${gineco.e}` : '',
+				gineco.dum ? `DUM: ${gineco.dum}` : '',
+				gineco.mac ? `MAC: ${gineco.mac}` : ''
+			].filter(Boolean);
+			if (ginecoFields.length > 0) {
+				lines.push('HISTÓRIA GINECOLÓGICA');
+				lines.push(`   ${ginecoFields.join('   ')}`);
+				lines.push('');
+			}
 		}
 
 		const finalText = lines.join('\n');
@@ -1223,19 +1294,19 @@
 	async function exportarObjetivo() {
 		const lines = [];
 
-		lines.push('## EXAME FÍSICO E TESTES (O)');
+		lines.push('EXAME FÍSICO E TESTES (O)');
 		lines.push('');
 
 		// Sinais Vitais
 		const sv = objective.sinaisVitais;
 		const sinaisVitaisPreenchidos = sv.pas || sv.pad || sv.temperatura || sv.frequenciaCardiaca || sv.frequenciaRespiratoria || sv.spo2;
 		if (sinaisVitaisPreenchidos) {
-			lines.push('**SINAIS VITAIS**');
-			if (sv.pas || sv.pad) lines.push(`- **PA:** ${sv.pas || '--'}/${sv.pad || '--'} mmHg`);
-			if (sv.temperatura) lines.push(`- **Temperatura:** ${sv.temperatura} °C`);
-			if (sv.frequenciaCardiaca) lines.push(`- **FC:** ${sv.frequenciaCardiaca} bpm`);
-			if (sv.frequenciaRespiratoria) lines.push(`- **FR:** ${sv.frequenciaRespiratoria} irpm`);
-			if (sv.spo2) lines.push(`- **SpO2:** ${sv.spo2} %`);
+			lines.push('SINAIS VITAIS');
+			if (sv.pas || sv.pad) lines.push(`   • PA: ${sv.pas || '--'}/${sv.pad || '--'} mmHg`);
+			if (sv.temperatura) lines.push(`   • Temperatura: ${sv.temperatura} °C`);
+			if (sv.frequenciaCardiaca) lines.push(`   • FC: ${sv.frequenciaCardiaca} bpm`);
+			if (sv.frequenciaRespiratoria) lines.push(`   • FR: ${sv.frequenciaRespiratoria} irpm`);
+			if (sv.spo2) lines.push(`   • SpO2: ${sv.spo2} %`);
 			lines.push('');
 		}
 
@@ -1243,11 +1314,11 @@
 		const ant = objective.antropometria;
 		const antropometriaPreenchida = ant.altura || ant.peso || ant.circunferenciaAbdominal || ant.imc;
 		if (antropometriaPreenchida) {
-			lines.push('**ANTROPOMETRIA**');
-			if (ant.altura) lines.push(`- **Altura:** ${ant.altura} cm`);
-			if (ant.peso) lines.push(`- **Peso:** ${ant.peso} kg`);
-			if (ant.circunferenciaAbdominal) lines.push(`- **Circunferência Abdominal:** ${ant.circunferenciaAbdominal} cm`);
-			if (ant.imc) lines.push(`- **IMC:** ${ant.imc} kg/m²`);
+			lines.push('ANTROPOMETRIA');
+			if (ant.altura) lines.push(`   • Altura: ${ant.altura} cm`);
+			if (ant.peso) lines.push(`   • Peso: ${ant.peso} kg`);
+			if (ant.circunferenciaAbdominal) lines.push(`   • Circunferência Abdominal: ${ant.circunferenciaAbdominal} cm`);
+			if (ant.imc) lines.push(`   • IMC: ${ant.imc} kg/m²`);
 			lines.push('');
 		}
 
@@ -1255,15 +1326,16 @@
 		const ef = objective.exameFisico;
 		const exameFisicoPreenchido = ef.geral || ef.aparelhoDigestorio || ef.aparelhoCardiovascular || ef.sistemaLinfatico || ef.neurologico || ef.respiratorioInferior || ef.respiratorioSuperior || ef.ginecologico;
 		if (exameFisicoPreenchido) {
-			lines.push('**EXAME FÍSICO**');
-			if (ef.geral) lines.push(`- **Geral:** ${ef.geral}`);
-			if (ef.aparelhoDigestorio) lines.push(`- **Aparelho Digestório:** ${ef.aparelhoDigestorio}`);
-			if (ef.aparelhoCardiovascular) lines.push(`- **Aparelho Cardiovascular:** ${ef.aparelhoCardiovascular}`);
-			if (ef.sistemaLinfatico) lines.push(`- **Sistema Linfático:** ${ef.sistemaLinfatico}`);
-			if (ef.neurologico) lines.push(`- **Neurológico:** ${ef.neurologico}`);
-			if (ef.respiratorioInferior) lines.push(`- **Respiratório Inferior:** ${ef.respiratorioInferior}`);
-			if (ef.respiratorioSuperior) lines.push(`- **Respiratório Superior (ORL):** ${ef.respiratorioSuperior}`);
-				// Exame Ginecológico detalhado
+			lines.push('EXAME FÍSICO');
+			if (ef.geral) lines.push(`   • Geral: ${ef.geral}`);
+			if (ef.aparelhoDigestorio) lines.push(`   • Aparelho Digestório: ${ef.aparelhoDigestorio}`);
+			if (ef.aparelhoCardiovascular) lines.push(`   • Aparelho Cardiovascular: ${ef.aparelhoCardiovascular}`);
+			if (ef.sistemaLinfatico) lines.push(`   • Sistema Linfático: ${ef.sistemaLinfatico}`);
+			if (ef.neurologico) lines.push(`   • Neurológico: ${ef.neurologico}`);
+			if (ef.respiratorioInferior) lines.push(`   • Respiratório Inferior: ${ef.respiratorioInferior}`);
+			if (ef.respiratorioSuperior) lines.push(`   • Respiratório Superior (ORL): ${ef.respiratorioSuperior}`);
+
+			// Exame Ginecológico detalhado
 			if (subjective.identificacao.sexo === 'Feminino') {
 				const gineco = ef.ginecologico;
 				const mamas = gineco?.mamas;
@@ -1274,9 +1346,8 @@
 					mamas?.inspecaoEstatica?.posicao || mamas?.inspecaoEstatica?.simetria;
 				
 				if (temExameGinecologico) {
-					lines.push('- **Exame Ginecológico:**');
+					lines.push('   • Exame Ginecológico:');
 					
-					// Exame das Mamas
 					if (mamas) {
 						const ie = mamas.inspecaoEstatica;
 						const id = mamas.inspecaoDinamica;
@@ -1284,9 +1355,7 @@
 							ie?.observacoes || id?.observacoes || mamas?.palpacao || mamas?.expressao?.resultado;
 						
 						if (temMamas) {
-							lines.push('  - **Exame das Mamas:**');
-							
-							// Inspeção Estática
+							lines.push('      Mamas:');
 							const ieCampos = [];
 							if (ie?.posicao) ieCampos.push(`Posição: ${ie.posicao}`);
 							if (ie?.simetria) ieCampos.push(`Simetria: ${ie.simetria}`);
@@ -1294,74 +1363,72 @@
 							if (ie?.mamilos) ieCampos.push(`Mamilos: ${ie.mamilos}`);
 							if (ie?.ausenciaAbaulamentosRetracoes) ieCampos.push('Ausência de abaulamentos/retrações');
 							if (ie?.observacoes) ieCampos.push(`Obs: ${ie.observacoes}`);
-							if (ieCampos.length > 0) {
-								lines.push(`    - Inspeção Estática: ${ieCampos.join(', ')}`);
-							}
+							if (ieCampos.length > 0) lines.push(`         Inspeção Estática: ${ieCampos.join(', ')}`);
 							
-							// Inspeção Dinâmica
 							const idCampos = [];
 							if (id?.ausenciaAbaulamentosRetracoes) idCampos.push('Ausência de abaulamentos/retrações');
 							if (id?.observacoes) idCampos.push(`Obs: ${id.observacoes}`);
-							if (idCampos.length > 0) {
-								lines.push(`    - Inspeção Dinâmica: ${idCampos.join(', ')}`);
-							}
+							if (idCampos.length > 0) lines.push(`         Inspeção Dinâmica: ${idCampos.join(', ')}`);
 							
-							// Palpação
-							if (mamas?.palpacao?.trim()) {
-								lines.push(`    - Palpação: ${mamas.palpacao}`);
-							}
+							if (mamas?.palpacao?.trim()) lines.push(`         Palpação: ${mamas.palpacao}`);
 							
-							// Expressão
 							if (mamas?.expressao?.resultado) {
 								const expObs = mamas.expressao.observacoes ? ` (${mamas.expressao.observacoes})` : '';
-								lines.push(`    - Expressão: ${mamas.expressao.resultado}${expObs}`);
+								lines.push(`         Expressão: ${mamas.expressao.resultado}${expObs}`);
 							}
 						}
-						
-						// Exame da Genitália
-						const temGenitalia = genitalia?.externa || genitalia?.interna || genitalia?.toqueVaginal;
-						if (temGenitalia) {
-							lines.push('  - **Exame da Genitália:**');
-							if (genitalia?.externa?.trim()) lines.push(`    - Externa: ${genitalia.externa}`);
-							if (genitalia?.interna?.trim()) lines.push(`    - Interna: ${genitalia.interna}`);
-							if (genitalia?.toqueVaginal?.trim()) lines.push(`    - Toque Vaginal: ${genitalia.toqueVaginal}`);
-						}
 					}
-					lines.push('');
+					
+					const temGenitalia = genitalia?.externa || genitalia?.interna || genitalia?.toqueVaginal;
+					if (temGenitalia) {
+						lines.push('      Genitália:');
+						if (genitalia?.externa?.trim()) lines.push(`         Externa: ${genitalia.externa}`);
+						if (genitalia?.interna?.trim()) lines.push(`         Interna: ${genitalia.interna}`);
+						if (genitalia?.toqueVaginal?.trim()) lines.push(`         Toque Vaginal: ${genitalia.toqueVaginal}`);
+					}
 				}
 			}
 			lines.push('');
 		}
 
-		// Exames Laboratoriais
+		// Exames Laboratoriais — formato hierárquico por pacote, sem negrito
 		if (laboratorioPivotPorPacote.length > 0) {
-			lines.push('**EXAMES LABORATORIAIS**');
-			for (const pacoteData of laboratorioPivotPorPacote) {
-				lines.push(`\n*${pacoteData.pacote}:*`);
-				const header = ['Exame', 'Val. Ref.', 'Unid.', ...pacoteData.datas.map(d => d === 'Sem data' ? 'Sem data' : new Date(d).toLocaleDateString('pt-BR'))].join(' | ');
-				lines.push(header);
-				for (const exame of pacoteData.exames) {
-					const row = [
-						exame.nome,
-						exame.valoresReferencia || '-',
-						exame.unidade || '-',
-						...pacoteData.datas.map(d => exame.resultadosPorData[d] || '-')
-					].join(' | ');
-					lines.push(row);
-				}
-			}
+			lines.push('EXAMES LABORATORIAIS');
 			lines.push('');
+			for (const pacoteData of laboratorioPivotPorPacote) {
+				// Nome do pacote como subtítulo
+				lines.push(pacoteData.pacote);
+				for (const exame of pacoteData.exames) {
+					// Resultados em ordem cronológica: data resultado+unidade separados por ;
+					const resultadosParts = pacoteData.datas
+						.filter(d => exame.resultadosPorData[d])
+						.map(d => {
+							const dataFmt = d === 'Sem data' ? 'Sem data' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
+							const resultado = exame.resultadosPorData[d];
+							const unidade = exame.unidade ? exame.unidade : '';
+							return `${dataFmt} ${resultado}${unidade}`;
+						});
+					const valRef = exame.valoresReferencia
+						? `Valores de referência: ${exame.valoresReferencia}${exame.unidade ? exame.unidade : ''}`
+						: '';
+					const partes = resultadosParts.length > 0 ? resultadosParts.join('; ') : 'Sem resultado';
+					const linha = valRef ? `${partes}; ${valRef}` : partes;
+					lines.push(`   ${exame.nome}: ${linha}`);
+				}
+				lines.push('');
+			}
 		}
 
 		// Exames de Imagem
 		if (imagemSelecionados.length > 0) {
-			lines.push('**EXAMES DE IMAGEM E FUNCIONAIS**');
-			for (const item of imagemSelecionados) {
-				lines.push(`- **${item.nome}**`);
-				if (item.motivo) lines.push(`  - Motivo: ${item.motivo}`);
-				if (item.resultado) lines.push(`  - Resultado: ${item.resultado}`);
-				if (item.medicoExecutor) lines.push(`  - Médico: ${item.medicoExecutor}`);
-			}
+			lines.push('EXAMES DE IMAGEM E FUNCIONAIS');
+			lines.push('');
+			imagemSelecionados.forEach((item, i) => {
+				lines.push(`   ${i + 1}. ${item.nome}`);
+				if (item.motivo) lines.push(`      Motivo: ${item.motivo}`);
+				if (item.resultado) lines.push(`      Resultado: ${item.resultado}`);
+				if (item.medicoExecutor) lines.push(`      Médico: ${item.medicoExecutor}`);
+			});
 			lines.push('');
 		}
 
@@ -3953,8 +4020,8 @@
 	</div>
 </dialog>
 <!-- Modal de Escores de Risco -->
-<dialog bind:this={calculadorasDialogRef} class="w-full max-w-4xl rounded-3xl p-0 backdrop:bg-slate-950/30">
-	<div class="flex h-full max-h-[85vh] flex-col bg-white">
+<dialog bind:this={calculadorasDialogRef} class="w-full max-w-4xl max-h-[85vh] rounded-3xl p-0 backdrop:bg-slate-950/30 overflow-hidden">
+	<div class="flex flex-col bg-white overflow-hidden" style="max-height: 85vh;">
 		<div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
 			<h3 class="text-lg font-semibold text-slate-900">Escores de Risco e Calculadoras</h3>
 			<button type="button" on:click={closeCalculadorasModal} class="text-slate-400 hover:text-slate-600">

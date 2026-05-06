@@ -33,7 +33,7 @@ async function callGemini(texto) {
 	}
 
 	const endpoint =
-		'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
+		'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 	const response = await fetch(`${endpoint}?key=${apiKey}`, {
 		method: 'POST',
