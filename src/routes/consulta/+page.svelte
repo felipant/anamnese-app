@@ -282,7 +282,7 @@
 		},
 	};
 
-	/** @typedef {{ id: string; nome: string; pacote?: string; valoresReferencia?: string; unidade?: string; resultado?: string; selecionado?: boolean; significado?: string; dataExecucao?: string; }} LaboratorioItem */
+	/** @typedef {{ id: string; dbId?: number; nome: string; pacote?: string; valoresReferencia?: string; unidade?: string; resultado?: string; selecionado?: boolean; significado?: string; dataExecucao?: string; }} LaboratorioItem */
 	/** @typedef {{ id: string; nome: string; motivo?: string; resultado?: string; medicoExecutor?: string; dataRealizacao?: string; }} ImagemItem */
 
 	// Variáveis para Exames Laboratoriais
@@ -2940,6 +2940,7 @@
 					/** @type {{ id: number; nome: string; valores_referencia: string | null; unidade_medida: string | null; significado: string | null; }} */ exame,
 				) => ({
 					id: createId(),
+					dbId: exame.id,
 					nome: exame.nome,
 					pacote: pacote,
 					valoresReferencia: exame.valores_referencia || "",
@@ -2951,7 +2952,12 @@
 				}),
 			);
 
-			labExamesEmEdicao = [...labExamesEmEdicao, ...examesDoPacote];
+			// Mantém os exames em edição ordenados pelo id do exame
+			labExamesEmEdicao = [...labExamesEmEdicao, ...examesDoPacote].sort((a, b) => {
+				const idA = a.dbId ?? Number.MAX_SAFE_INTEGER;
+				const idB = b.dbId ?? Number.MAX_SAFE_INTEGER;
+				return idA - idB;
+			});
 		} catch (e) {
 			erro =
 				e instanceof Error
@@ -2983,10 +2989,15 @@
 			erro = "Todos os exames devem ter uma Data de Execução.";
 			return;
 		}
+		// Mantém a ordem pelo id do exame
 		laboratorioSelecionados = [
 			...laboratorioSelecionados,
 			...labExamesEmEdicao,
-		];
+		].sort((a, b) => {
+			const idA = a.dbId ?? Number.MAX_SAFE_INTEGER;
+			const idB = b.dbId ?? Number.MAX_SAFE_INTEGER;
+			return idA - idB;
+		});
 		labExamesEmEdicao = [];
 		labPacoteSelecionado = "";
 		labDataExecucao = "";
@@ -3019,11 +3030,12 @@
 	}
 
 	/**
-	 * @param {{ nome: string; pacote?: string | null; valores_referencia?: string | null; unidade_medida?: string | null; }} exame
+	 * @param {{ id?: number; nome: string; pacote?: string | null; valores_referencia?: string | null; unidade_medida?: string | null; }} exame
 	 */
 	function adicionarExameLaboratorial(exame) {
 		const novoExame = {
 			id: createId(),
+			dbId: exame.id,
 			nome: exame.nome,
 			pacote: exame.pacote || labPacoteSelecionado || "Exame Avulso",
 			valoresReferencia: exame.valores_referencia || "",
@@ -3031,7 +3043,11 @@
 			resultado: "",
 			selecionado: false,
 		};
-		laboratorioSelecionados = [...laboratorioSelecionados, novoExame];
+		laboratorioSelecionados = [...laboratorioSelecionados, novoExame].sort((a, b) => {
+			const idA = a.dbId ?? Number.MAX_SAFE_INTEGER;
+			const idB = b.dbId ?? Number.MAX_SAFE_INTEGER;
+			return idA - idB;
+		});
 	}
 
 	function adicionarExameLaboratorialManual() {
@@ -3048,7 +3064,11 @@
 			resultado: "",
 			selecionado: false,
 		};
-		laboratorioSelecionados = [...laboratorioSelecionados, novoExame];
+		laboratorioSelecionados = [...laboratorioSelecionados, novoExame].sort((a, b) => {
+			const idA = a.dbId ?? Number.MAX_SAFE_INTEGER;
+			const idB = b.dbId ?? Number.MAX_SAFE_INTEGER;
+			return idA - idB;
+		});
 		labExameManual = { nome: "", valoresReferencia: "", unidade: "" };
 		erro = "";
 	}
@@ -3288,7 +3308,12 @@
 			})); // Reatividade por propagação via map
 		}
 		if (Array.isArray(storedLaboratorio) && storedLaboratorio.length > 0) {
-			laboratorioSelecionados = [...storedLaboratorio]; // Reatividade por propagação
+			// Mantém ordenado pelo id do exame ao carregar
+			laboratorioSelecionados = [...storedLaboratorio].sort((a, b) => {
+				const idA = a.dbId ?? Number.MAX_SAFE_INTEGER;
+				const idB = b.dbId ?? Number.MAX_SAFE_INTEGER;
+				return idA - idB;
+			});
 		}
 		if (Array.isArray(storedImagem) && storedImagem.length > 0) {
 			imagemSelecionados = [...storedImagem]; // Reatividade por propagação

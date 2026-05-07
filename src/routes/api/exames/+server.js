@@ -49,11 +49,11 @@ export async function GET(event) {
 		const stmt = pacote
 			? db
 					.prepare(
-						'SELECT id, material, nome, pacote, unidade_medida, valores_referencia, significado FROM exames WHERE COALESCE(pacote, "") LIKE ? ORDER BY nome ASC'
+						'SELECT id, material, nome, pacote, unidade_medida, valores_referencia, significado FROM exames WHERE COALESCE(pacote, "") LIKE ? ORDER BY pacote ASC, id ASC'
 					)
 					.bind(filter)
 			: db.prepare(
-					'SELECT id, material, nome, pacote, unidade_medida, valores_referencia, significado FROM exames ORDER BY nome ASC'
+					'SELECT id, material, nome, pacote, unidade_medida, valores_referencia, significado FROM exames ORDER BY pacote ASC, id ASC'
 				);
 		const result = await stmt.all();
 
