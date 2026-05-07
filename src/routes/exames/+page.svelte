@@ -111,6 +111,123 @@
 		}
 	}
 
+	/**
+	 * Parses a CSV string into rows with key-value pairs
+	 * @param {string} text
+	 * @returns {Array<Record<string, string>>}
+	 */
+	function parseCSV(text) {
+		const lines = text.split(/\r?\n/).filter(line => line.trim());
+		if (lines.length < 2) return [];
+
+		const headerLine = lines[0];
+		const delimiter = headerLine.includes(";") ? ";" : ",";
+
+		const splitRow = (rowText) => {
+			const result = [];
+			let current = "";
+			let inQuotes = false;
+			for (let i = 0; i < rowText.length; i++) {
+				const char = rowText[i];
+				if (char === '"') {
+					inQuotes = !inQuotes;
+				} else if (char === delimiter && !inQuotes) {
+					result.push(current.trim().replace(/^"|"$/g, ""));
+					current = "";
+				} else {
+					current += char;
+				}
+			}
+			result.push(current.trim().replace(/^"|"$/g, ""));
+			return result;
+		};
+
+		const headers = splitRow(headerLine).map(h => h.toLowerCase().trim());
+		
+		const rows = [];
+		for (let i = 1; i < lines.length; i++) {
+			const values = splitRow(lines[i]);
+			const row = /** @type {Record<string, string>} */ ({});
+			headers.forEach((header, idx) => {
+				row[header] = values[idx] || "";
+			});
+			rows.push(row);
+		}
+		return rows;
+	}
+
+	/**
+	 * @param {Event & { target: HTMLInputElement }} event
+	 */
+	async function handleCSVUpload(event) {
+		const file = event.target.files?.[0];
+		if (!file) return;
+
+		const reader = new FileReader();
+		reader.onload = async (e) => {
+			try {
+				const text = e.target?.result;
+				if (typeof text !== "string") return;
+
+				const rows = parseCSV(text);
+				if (rows.length === 0) {
+					erro = "Arquivo CSV vazio ou inválido.";
+					return;
+				}
+
+				let importedCount = 0;
+				let errorCount = 0;
+
+				for (const row of rows) {
+					const nome = row.nome || row.exame || row.test || row.name || "";
+					if (!nome.trim()) continue;
+
+					const material = row.material || "Sangue";
+					const pacote = row.pacote || row.grupo || row.package || "";
+					const unidade = row.unidade || row.unit || row.unidade_medida || "";
+					const referencia = row.referencia || row.valores || row.valores_referencia || row.valores_de_referencia || row.ref || row.reference || "";
+					const significado = row.significado || row.interpretacao || row.meaning || "";
+
+					try {
+						const res = await fetch("/api/exames", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								material: material.trim(),
+								nome: nome.trim(),
+								pacote: pacote.trim(),
+								unidade_medida: unidade.trim(),
+								valores_referencia: referencia.trim(),
+								significado: significado.trim()
+							})
+						});
+						if (res.ok) {
+							importedCount++;
+						} else {
+							errorCount++;
+						}
+					} catch (err) {
+						errorCount++;
+					}
+				}
+
+				if (importedCount === 0) {
+					erro = "Nenhum exame pôde ser importado. Verifique a formatação do CSV.";
+					return;
+				}
+
+				aviso = `${importedCount} exames importados com sucesso para a base de dados!${errorCount > 0 ? ` (${errorCount} falhas)` : ""}`;
+				setTimeout(() => (aviso = ""), 5000);
+				erro = "";
+				event.target.value = "";
+				await carregarExames();
+			} catch (err) {
+				erro = "Erro ao processar o arquivo CSV.";
+			}
+		};
+		reader.readAsText(file);
+	}
+
 	onMount(carregarExames);
 </script>
 
@@ -128,12 +245,23 @@
 					"hemograma" (ex: hemoglobina, plaquetas).
 				</p>
 			</div>
-			<button
-				on:click={abrirNovo}
-				class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-			>
-				Novo Exame
-			</button>
+			<div class="flex items-center gap-2">
+				<label class="relative cursor-pointer rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+					<span>Importar CSV</span>
+					<input
+						type="file"
+						accept=".csv"
+						on:change={handleCSVUpload}
+						class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+					/>
+				</label>
+				<button
+					on:click={abrirNovo}
+					class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+				>
+					Novo Exame
+				</button>
+			</div>
 		</header>
 
 		{#if erro}
